@@ -10,6 +10,7 @@ const originSchema = z.string().refine((value) => {
 }, 'Expected an exact HTTP(S) origin without a path');
 
 const envSchema = z.object({
+  MONGO_URI: z.string().regex(/^mongodb(?:\+srv)?:\/\/[^\s]+$/, 'Expected a MongoDB connection URI'),
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   PORT: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(65535)).prefault('3000'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -23,10 +24,13 @@ function loadConfig(environment = process.env) {
   if (!result.success) {
     // Report field names, never raw environment values.
     const fields = [...new Set(result.error.issues.map((issue) => issue.path[0]))];
-    throw new Error(`Invalid environment configuration: ${fields.join(', ')}`);
+    const error = new Error(`Invalid environment configuration: ${fields.join(', ')}`);
+    error.code = 'INVALID_CONFIGURATION';
+    throw error;
   }
   return Object.freeze({
     nodeEnv: result.data.NODE_ENV,
+    mongoUri: result.data.MONGO_URI,
     port: result.data.PORT,
     logLevel: result.data.LOG_LEVEL,
     allowedOrigins: Object.freeze([...new Set(result.data.ALLOWED_ORIGINS)]),

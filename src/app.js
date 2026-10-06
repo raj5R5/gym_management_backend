@@ -3,13 +3,12 @@ const helmet = require('helmet');
 const cors = require('cors');
 const pinoHttp = require('pino-http');
 const { rateLimit } = require('express-rate-limit');
-const { loadConfig } = require('./config/env');
 const { createLogger } = require('./config/logger');
 const requestId = require('./middleware/requestId');
 const notFound = require('./middleware/notFound');
 const errorHandler = require('./middleware/errorHandler');
 
-function createApp({ config = loadConfig(), logger = createLogger(config) } = {}) {
+function createApp({ config, logger = createLogger(config), database } = {}) {
   const app = express();
   app.disable('x-powered-by');
   // No proxy is trusted until the deployment topology is explicitly configured.
@@ -68,24 +67,26 @@ function createApp({ config = loadConfig(), logger = createLogger(config) } = {}
   });
   app.get('/health', health);
   app.get('/api/v1/health', health);
-  app.get('/ready', (req, res) => res.status(app.locals.ready ? 200 : 503).json({
-    success: app.locals.ready,
-    data: {
-      status: app.locals.ready ? 'ready' : 'shutting_down',
-      checks: {
-        application: app.locals.ready ? 'ready' : 'shutting_down',
-        database: 'not_implemented',
+  app.get('/ready', (req, res) => {
+    const databaseStatus = database?.getStatus() ?? 'disconnected';
+    const ready = app.locals.ready && databaseStatus === 'connected';
+    return res.status(ready ? 200 : 503).json({
+      success: ready,
+      data: {
+        status: !app.locals.ready ? 'shutting_down' : ready ? 'ready' : 'not_ready',
+        checks: {
+          application: app.locals.ready ? 'ready' : 'shutting_down',
+          database: databaseStatus,
+        },
       },
-    },
-    meta: { requestId: req.id },
-  }));
+      meta: { requestId: req.id },
+    });
+  });
 
   app.use(notFound);
   app.use(errorHandler);
   return app;
 }
 
-// Export an Express application without opening a socket; the factory isolates tests.
-const app = createApp();
-module.exports = app;
-module.exports.createApp = createApp;
+// Construction is explicit: importing this module validates no environment and opens no sockets.
+module.exports = { createApp };

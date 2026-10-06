@@ -3,15 +3,19 @@ const assert = require('node:assert/strict');
 const { Writable } = require('node:stream');
 const express = require('express');
 const request = require('supertest');
-const exportedApp = require('../../src/app');
-const { createApp } = exportedApp;
+const { createApp } = require('../../src/app');
 const { loadConfig } = require('../../src/config/env');
 const { createLogger } = require('../../src/config/logger');
 const requestId = require('../../src/middleware/requestId');
 const errorHandler = require('../../src/middleware/errorHandler');
 
+// Synthetic configuration only; these HTTP tests never open a database connection.
+function testConfig(environment = {}) {
+  return loadConfig({ MONGO_URI: 'mongodb://database.invalid/foundation-test', ...environment });
+}
+
 function makeApp(environment = {}) {
-  return createApp({ config: loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent', ...environment }) });
+  return createApp({ config: testConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent', ...environment }) });
 }
 
 function assertError(response, status, code) {
@@ -24,9 +28,10 @@ function assertError(response, status, code) {
   assert.equal(response.body.meta.requestId, response.headers['x-request-id']);
 }
 
-test('app exports an Express application without opening a server', () => {
-  assert.equal(typeof exportedApp, 'function');
-  assert.equal(typeof exportedApp.listen, 'function');
+test('app factory creates an Express application without opening a server', () => {
+  const app = makeApp();
+  assert.equal(typeof app, 'function');
+  assert.equal(typeof app.listen, 'function');
 });
 
 test('health endpoint reports application health and security headers', async () => {
@@ -49,9 +54,9 @@ test('versioned health endpoint uses the same response contract', async () => {
 test('readiness explicitly distinguishes process readiness from database checks', async () => {
   const app = makeApp();
   const response = await request(app).get('/ready');
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 503);
   assert.deepEqual(response.body.data, {
-    status: 'ready', checks: { application: 'ready', database: 'not_implemented' },
+    status: 'not_ready', checks: { application: 'ready', database: 'disconnected' },
   });
   app.locals.ready = false;
   const stopping = await request(app).get('/ready');
@@ -136,20 +141,20 @@ test('general rate limiting returns the standard 429 error without blocking prob
   assert.ok(limited.headers['retry-after']);
   assert.ok(limited.headers.ratelimit);
   assert.equal((await request(app).get('/health')).status, 200);
-  assert.equal((await request(app).get('/ready')).status, 200);
+  assert.equal((await request(app).get('/ready')).status, 503);
 });
 
 test('environment validation rejects invalid configuration without leaking values', () => {
-  assert.equal(loadConfig({}).port, 3000);
-  assert.deepEqual(loadConfig({}).allowedOrigins, []);
+  assert.equal(testConfig({}).port, 3000);
+  assert.deepEqual(testConfig({}).allowedOrigins, []);
   for (const env of [
     { PORT: '0' }, { PORT: '65536' }, { PORT: '1.5' }, { PORT: '' },
     { NODE_ENV: 'unknown' }, { LOG_LEVEL: 'invalid' },
     { ALLOWED_ORIGINS: '*' }, { ALLOWED_ORIGINS: 'https://example.com/path' },
   ]) {
-    assert.throws(() => loadConfig(env), /Invalid environment configuration/);
+    assert.throws(() => testConfig(env), /Invalid environment configuration/);
   }
-  const config = loadConfig({ PORT: '4321', NODE_ENV: 'staging', ALLOWED_ORIGINS: ' https://a.example,https://a.example ' });
+  const config = testConfig({ PORT: '4321', NODE_ENV: 'staging', ALLOWED_ORIGINS: ' https://a.example,https://a.example ' });
   assert.equal(config.port, 4321);
   assert.deepEqual(config.allowedOrigins, ['https://a.example']);
 });
@@ -159,7 +164,7 @@ test('structured logs correlate requests and omit sensitive request data', async
   const destination = new Writable({
     write(chunk, _encoding, callback) { output += chunk.toString(); callback(); },
   });
-  const config = loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'info' });
+  const config = testConfig({ NODE_ENV: 'test', LOG_LEVEL: 'info' });
   const logger = createLogger(config, destination);
   const app = createApp({ config, logger });
   await request(app).post('/unknown?token=query-secret')
