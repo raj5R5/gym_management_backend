@@ -1,5 +1,9 @@
 const publicErrors = {
   NOT_FOUND: [404, 'Route not found.'],
+  GYM_NOT_FOUND: [404, 'Gym not found.'],
+  BRANCH_NOT_FOUND: [404, 'Branch not found.'],
+  VALIDATION_ERROR: [400, 'Request validation failed.'],
+  BOOTSTRAP_FORBIDDEN: [403, 'Bootstrap routes require a local development client.'],
   CORS_ORIGIN_DENIED: [403, 'Origin is not allowed.'],
   RATE_LIMITED: [429, 'Too many requests. Please try again later.'],
 };
@@ -11,7 +15,9 @@ function errorHandler(error, req, res, next) {
   let code = 'INTERNAL_SERVER_ERROR';
   let message = 'An unexpected server error occurred.';
 
-  if (error.type === 'entity.parse.failed') {
+  if (error.code === 11000) {
+    [status, code, message] = [409, 'DUPLICATE_NAME', 'Name already exists in this scope.'];
+  } else if (error.type === 'entity.parse.failed') {
     [status, code, message] = [400, 'INVALID_JSON', 'Request body must contain valid JSON.'];
   } else if (error.type === 'entity.too.large') {
     [status, code, message] = [413, 'PAYLOAD_TOO_LARGE', 'Request body exceeds the allowed size.'];

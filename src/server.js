@@ -80,6 +80,13 @@ async function startServer({
     await database.connect(config);
     if (stopping) throw new Error('Startup interrupted.');
     app = createApp({ config, logger, database });
+    if (config.enableBootstrapRoutes && ['development', 'test'].includes(config.nodeEnv)) {
+      // Explicitly create only the bootstrap domain indexes; never drop existing indexes.
+      await Promise.all([
+        database.connection.models.Gym.createIndexes(),
+        database.connection.models.Branch.createIndexes(),
+      ]);
+    }
     await new Promise((resolve, reject) => {
       server = app.listen(config.port);
       server.once('listening', resolve);

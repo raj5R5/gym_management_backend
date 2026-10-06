@@ -10,6 +10,7 @@ const originSchema = z.string().refine((value) => {
 }, 'Expected an exact HTTP(S) origin without a path');
 
 const envSchema = z.object({
+  ENABLE_BOOTSTRAP_ROUTES: z.enum(['true', 'false']).default('false'),
   MONGO_URI: z.string().regex(/^mongodb(?:\+srv)?:\/\/[^\s]+$/, 'Expected a MongoDB connection URI'),
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   PORT: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(65535)).prefault('3000'),
@@ -31,6 +32,7 @@ function loadConfig(environment = process.env) {
   return Object.freeze({
     nodeEnv: result.data.NODE_ENV,
     mongoUri: result.data.MONGO_URI,
+    enableBootstrapRoutes: result.data.ENABLE_BOOTSTRAP_ROUTES === 'true',
     port: result.data.PORT,
     logLevel: result.data.LOG_LEVEL,
     allowedOrigins: Object.freeze([...new Set(result.data.ALLOWED_ORIGINS)]),

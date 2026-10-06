@@ -7,6 +7,11 @@ const { createLogger } = require('./config/logger');
 const requestId = require('./middleware/requestId');
 const notFound = require('./middleware/notFound');
 const errorHandler = require('./middleware/errorHandler');
+const { getGymModel } = require('./modules/gyms/gym.model');
+const { getBranchModel } = require('./modules/branches/branch.model');
+const { createGymService } = require('./modules/gyms/gym.service');
+const { createBranchService } = require('./modules/branches/branch.service');
+const { createGymRouter } = require('./modules/gyms/gym.routes');
 
 function createApp({ config, logger = createLogger(config), database } = {}) {
   const app = express();
@@ -82,6 +87,24 @@ function createApp({ config, logger = createLogger(config), database } = {}) {
       meta: { requestId: req.id },
     });
   });
+
+  // Temporary unauthenticated bootstrap functionality, never a production authorization path.
+  if (config.enableBootstrapRoutes && ['development', 'test'].includes(config.nodeEnv)) {
+    if (!database?.connection) throw new Error('Bootstrap routes require a database connection.');
+    const gymService = createGymService(getGymModel(database.connection));
+    const branchService = createBranchService(getBranchModel(database.connection), gymService);
+    logger.warn('Unauthenticated Gym/Branch bootstrap routes enabled; local development only');
+    app.use('/api/v1/gyms', (req, res, next) => {
+      const address = req.socket.remoteAddress;
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address)) {
+        const error = new Error('Bootstrap routes are restricted to loopback clients.');
+        error.code = 'BOOTSTRAP_FORBIDDEN';
+        return next(error);
+      }
+      res.setHeader('X-API-Mode', 'development-bootstrap');
+      return next();
+    }, createGymRouter(gymService, branchService));
+  }
 
   app.use(notFound);
   app.use(errorHandler);
