@@ -12,6 +12,8 @@ function createLogger(config, destination) {
         '*.authorization', '*.cookie', '*.password', '*.passwordHash', '*.token',
         '*.accessToken', '*.refreshToken', '*.credentials', '*.secret',
         '*.mongoUri', '*.MONGO_URI', '*.uri',
+        'jwtAccessSecret', 'JWT_ACCESS_SECRET', '*.jwtAccessSecret', '*.JWT_ACCESS_SECRET',
+        'tokenHash', 'currentTokenHash', '*.tokenHash', '*.currentTokenHash',
       ],
       censor: '[REDACTED]',
     },

@@ -1,3 +1,4 @@
+const { testAuthEnv } = require('../helpers/authConfig');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -15,7 +16,7 @@ const { startServer } = require('../../src/server');
 // Test-only placeholder, never used to contact an external database.
 const testUri = 'mongodb://database.invalid/foundation-test';
 function config(overrides = {}) {
-  return loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent', MONGO_URI: testUri, ...overrides });
+  return loadConfig({ ...testAuthEnv, NODE_ENV: 'test', LOG_LEVEL: 'silent', MONGO_URI: testUri, ...overrides });
 }
 
 function captureLogger() {
@@ -205,7 +206,7 @@ test('real Mongoose failure against a controlled loopback non-MongoDB endpoint i
 });
 
 test('CLI rejects missing database configuration without contacting MongoDB', { timeout: 5000 }, async () => {
-  const environment = { ...process.env };
+  const environment = { ...process.env, ...testAuthEnv };
   delete environment.MONGO_URI;
   const child = spawn(process.execPath, ['src/server.js'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
@@ -218,11 +219,62 @@ test('CLI rejects missing database configuration without contacting MongoDB', { 
 });
 
 test('app import does not require MONGO_URI or establish a connection', { timeout: 5000 }, async () => {
-  const environment = { ...process.env };
+  const environment = { ...process.env, ...testAuthEnv };
   delete environment.MONGO_URI;
   const child = spawn(process.execPath, ['-e',
     'require("./src/app"); const mongoose = require("mongoose"); if (mongoose.connection.readyState !== 0) process.exit(1);',
   ], { env: environment, stdio: 'ignore' });
   const [code] = await once(child, 'close');
   assert.equal(code, 0);
+});
+
+test('dummy password hash initializes once before verification and sanitizes initialization errors', async () => {
+  const { createPasswordTools } = require('../../src/modules/auth/password');
+  const hashes = [];
+  const candidates = [];
+  const tools = createPasswordTools({ hash: async (value, options) => {
+    hashes.push({ value, options }); return 'test-dummy-hash';
+  }, verify: async (candidate) => { candidates.push(candidate); return true; } });
+  await assert.rejects(tools.verifyPassword(undefined, 'input'), { code: 'PASSWORD_INITIALIZATION_FAILED' });
+  await Promise.all([tools.initializePasswords(), tools.initializePasswords()]);
+  assert.equal(hashes.length, 1);
+  assert.equal(await tools.verifyPassword(undefined, 'input'), false);
+  assert.equal(await tools.verifyPassword('stored-hash', 'input'), true);
+  assert.deepEqual(candidates, ['test-dummy-hash', 'stored-hash']);
+  assert.equal(hashes.length, 1);
+  const failed = createPasswordTools({ hash: async () => { throw new Error('private hashing failure'); } });
+  await assert.rejects(failed.initializePasswords(), {
+    code: 'PASSWORD_INITIALIZATION_FAILED', message: 'Password verification initialization failed.',
+  });
+});
+
+test('password initialization failure prevents listening and cleans up the database', async () => {
+  const captured = captureLogger();
+  let closed = false;
+  await assert.rejects(startServer({ config: { ...config(), port: 0 }, logger: captured.logger,
+    database: { async connect() {}, async disconnect() { closed = true; } },
+    initializePasswordVerification: async () => {
+      const error = new Error('private initialization detail'); error.code = 'PASSWORD_INITIALIZATION_FAILED'; throw error;
+    },
+  }), { code: 'STARTUP_FAILED' });
+  assert.equal(closed, true);
+  assert.equal(captured.output().includes('API server started'), false);
+  assert.equal(captured.output().includes('private initialization detail'), false);
+  assert.ok(captured.output().includes('Password verification initialization failed'));
+});
+
+test('startup awaits password initialization before accepting HTTP traffic', async () => {
+  const captured = captureLogger();
+  const entered = Promise.withResolvers();
+  const initialized = Promise.withResolvers();
+  const pending = startServer({ config: { ...config(), port: 0 }, logger: captured.logger,
+    database: { async connect() {}, getStatus: () => 'connected', async disconnect() {} },
+    initializePasswordVerification: async () => { entered.resolve(); await initialized.promise; },
+  });
+  await entered.promise;
+  assert.equal(captured.output().includes('API server started'), false);
+  initialized.resolve();
+  const lifecycle = await pending;
+  try { assert.equal((await request(lifecycle.server).get('/health')).status, 200); }
+  finally { await lifecycle.shutdown('test'); }
 });

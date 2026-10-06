@@ -1,3 +1,4 @@
+const { testAuthEnv } = require('../helpers/authConfig');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Writable } = require('node:stream');
@@ -11,7 +12,7 @@ const errorHandler = require('../../src/middleware/errorHandler');
 
 // Synthetic configuration only; these HTTP tests never open a database connection.
 function testConfig(environment = {}) {
-  return loadConfig({ MONGO_URI: 'mongodb://database.invalid/foundation-test', ...environment });
+  return loadConfig({ ...testAuthEnv, MONGO_URI: 'mongodb://database.invalid/foundation-test', ...environment });
 }
 
 function makeApp(environment = {}) {
@@ -117,7 +118,7 @@ test('CORS allows only configured origins and handles preflight', async () => {
   const app = makeApp({ ALLOWED_ORIGINS: 'https://frontend.example' });
   const allowed = await request(app).get('/health').set('Origin', 'https://frontend.example');
   assert.equal(allowed.headers['access-control-allow-origin'], 'https://frontend.example');
-  assert.equal(allowed.headers['access-control-allow-credentials'], undefined);
+  assert.equal(allowed.headers['access-control-allow-credentials'], 'true');
   const preflight = await request(app).options('/api/v1/health')
     .set('Origin', 'https://frontend.example').set('Access-Control-Request-Method', 'GET');
   assert.equal(preflight.status, 204);

@@ -1,4 +1,9 @@
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const { getAuthSessionModel } = require('./modules/auth/authSession.model');
+const { getRefreshTokenModel } = require('./modules/auth/refreshToken.model');
+const { createAuthService } = require('./modules/auth/auth.service');
+const { createAuthRouter } = require('./modules/auth/auth.routes');
 const helmet = require('helmet');
 const cors = require('cors');
 const pinoHttp = require('pino-http');
@@ -20,7 +25,7 @@ const { getGymAccessModel } = require('./modules/gymAccess/gymAccess.model');
 const { createGymAccessService } = require('./modules/gymAccess/gymAccess.service');
 const { createGymAccessRouter } = require('./modules/gymAccess/gymAccess.routes');
 
-function createApp({ config, logger = createLogger(config), database } = {}) {
+function buildApp({ config, logger = createLogger(config), database, bootstrap = false } = {}) {
   const app = express();
   app.disable('x-powered-by');
   // No proxy is trusted until the deployment topology is explicitly configured.
@@ -50,7 +55,7 @@ function createApp({ config, logger = createLogger(config), database } = {}) {
       error.code = 'CORS_ORIGIN_DENIED';
       return callback(error);
     },
-    credentials: false,
+    credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
     exposedHeaders: ['X-Request-ID'],
@@ -71,6 +76,7 @@ function createApp({ config, logger = createLogger(config), database } = {}) {
     },
   }));
   app.use(express.json({ limit: '16kb' }));
+  app.use(cookieParser());
 
   const health = (req, res) => res.json({
     success: true,
@@ -95,15 +101,26 @@ function createApp({ config, logger = createLogger(config), database } = {}) {
     });
   });
 
+  let authService;
+  if (typeof database?.connection?.model === 'function') {
+    authService = createAuthService({
+      UserAccount: getUserAccountModel(database.connection),
+      GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
+      AuthSession: getAuthSessionModel(database.connection),
+      RefreshTokenRecord: getRefreshTokenModel(database.connection), config, logger,
+    });
+    app.use('/api/v1/auth', createAuthRouter(authService, config));
+  }
+
   // Temporary unauthenticated bootstrap functionality, never a production authorization path.
-  if (config.enableBootstrapRoutes && ['development', 'test'].includes(config.nodeEnv)) {
+  if (bootstrap && config.enableBootstrapRoutes && ['development', 'test'].includes(config.nodeEnv)) {
     if (!database?.connection) throw new Error('Bootstrap routes require a database connection.');
     const gymService = createGymService(getGymModel(database.connection));
     const branchService = createBranchService(getBranchModel(database.connection), gymService);
     const userService = createUserAccountService(getUserAccountModel(database.connection));
     const accessService = createGymAccessService(getGymAccessModel(database.connection), gymService, userService);
     logger.warn('Unauthenticated bootstrap routes enabled; local development only');
-    app.use('/api/v1/user-accounts', bootstrapOnly, createUserAccountRouter(userService));
+    app.use('/api/v1/user-accounts', bootstrapOnly, createUserAccountRouter(userService, authService, config));
     app.use('/api/v1/gyms/:gymId/access', bootstrapOnly, createGymAccessRouter(accessService));
     app.use('/api/v1/gyms', bootstrapOnly, createGymRouter(gymService, branchService));
   }
@@ -114,4 +131,12 @@ function createApp({ config, logger = createLogger(config), database } = {}) {
 }
 
 // Construction is explicit: importing this module validates no environment and opens no sockets.
-module.exports = { createApp };
+function createApp(options) { return buildApp({ ...options, bootstrap: false }); }
+function createBootstrapApp(options) {
+  const { config } = options;
+  if (!config.enableBootstrapRoutes || !['development', 'test'].includes(config.nodeEnv)) {
+    throw new Error('Bootstrap listener requires explicit development/test enablement.');
+  }
+  return buildApp({ ...options, bootstrap: true });
+}
+module.exports = { createApp, createBootstrapApp };

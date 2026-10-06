@@ -1,10 +1,11 @@
+const { testAuthEnv } = require('../helpers/authConfig');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 const request = require('supertest');
 const { startTestMongo } = require('../helpers/mongo');
 const { loadConfig } = require('../../src/config/env');
-const { createApp } = require('../../src/app');
+const { createApp, createBootstrapApp } = require('../../src/app');
 const { createLogger } = require('../../src/config/logger');
 const { createDatabase } = require('../../src/config/database');
 const { startServer } = require('../../src/server');
@@ -22,11 +23,11 @@ const branchPath = (gymId) => `${gymPath}/${gymId}/branches`;
 
 before(async () => {
   isolated = await startTestMongo();
-  config = loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent', MONGO_URI: isolated.uri,
+  config = loadConfig({ ...testAuthEnv, NODE_ENV: 'test', LOG_LEVEL: 'silent', MONGO_URI: isolated.uri,
     ENABLE_BOOTSTRAP_ROUTES: 'true' });
   database = createDatabase({ logger: createLogger(config) });
   await database.connect(config);
-  app = createApp({ config, database });
+  app = createBootstrapApp({ config, database });
   ({ Gym, Branch } = database.connection.models);
   // Indexes are real MongoDB constraints, not mocked uniqueness checks.
   await Promise.all([Gym.createIndexes(), Branch.createIndexes()]);
@@ -36,7 +37,7 @@ after(async () => {
   finally { if (isolated) await isolated.stop(); }
 });
 beforeEach(async () => {
-  app = createApp({ config, database });
+  app = createBootstrapApp({ config, database });
   await Promise.all([Gym.deleteMany({}), Branch.deleteMany({})]);
 });
 
@@ -244,13 +245,13 @@ test('no deletion routes exist', async () => {
 
 test('bootstrap startup creates missing indexes before serving HTTP', async () => {
   await Promise.all([Gym.collection.dropIndexes(), Branch.collection.dropIndexes()]);
-  const lifecycle = await startServer({ config: { ...config, port: 0 }, database });
+  const lifecycle = await startServer({ config: { ...config, port: 0, bootstrapPort: 0 }, database });
   try {
     const gymIndexes = await Gym.listIndexes();
     const branchIndexes = await Branch.listIndexes();
     assert.ok(gymIndexes.some((index) => index.name === 'gym_name_unique' && index.unique));
     assert.ok(branchIndexes.some((index) => index.name === 'branch_gym_name_unique' && index.unique));
-    assert.equal((await request(lifecycle.server).get(gymPath)).status, 200);
+    assert.equal((await request(lifecycle.bootstrapServer).get(gymPath)).status, 200);
   } finally {
     await lifecycle.shutdown('test');
   }
