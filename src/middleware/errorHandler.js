@@ -2,6 +2,8 @@ const publicErrors = {
   NOT_FOUND: [404, 'Route not found.'],
   GYM_NOT_FOUND: [404, 'Gym not found.'],
   BRANCH_NOT_FOUND: [404, 'Branch not found.'],
+  USER_ACCOUNT_NOT_FOUND: [404, 'User account not found.'],
+  GYM_ACCESS_NOT_FOUND: [404, 'Gym access not found.'],
   VALIDATION_ERROR: [400, 'Request validation failed.'],
   BOOTSTRAP_FORBIDDEN: [403, 'Bootstrap routes require a local development client.'],
   CORS_ORIGIN_DENIED: [403, 'Origin is not allowed.'],
@@ -16,7 +18,13 @@ function errorHandler(error, req, res, next) {
   let message = 'An unexpected server error occurred.';
 
   if (error.code === 11000) {
-    [status, code, message] = [409, 'DUPLICATE_NAME', 'Name already exists in this scope.'];
+    if (error.keyPattern?.normalizedEmail) {
+      [status, code, message] = [409, 'DUPLICATE_EMAIL', 'An account with this email already exists.'];
+    } else if (error.keyPattern?.userId && error.keyPattern?.gymId) {
+      [status, code, message] = [409, 'DUPLICATE_GYM_ACCESS', 'This account already has access to this gym.'];
+    } else {
+      [status, code, message] = [409, 'DUPLICATE_NAME', 'Name already exists in this scope.'];
+    }
   } else if (error.type === 'entity.parse.failed') {
     [status, code, message] = [400, 'INVALID_JSON', 'Request body must contain valid JSON.'];
   } else if (error.type === 'entity.too.large') {

@@ -85,6 +85,8 @@ async function startServer({
       await Promise.all([
         database.connection.models.Gym.createIndexes(),
         database.connection.models.Branch.createIndexes(),
+        database.connection.models.UserAccount.createIndexes(),
+        database.connection.models.GymAccess.createIndexes(),
       ]);
     }
     await new Promise((resolve, reject) => {

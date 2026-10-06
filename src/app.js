@@ -12,6 +12,13 @@ const { getBranchModel } = require('./modules/branches/branch.model');
 const { createGymService } = require('./modules/gyms/gym.service');
 const { createBranchService } = require('./modules/branches/branch.service');
 const { createGymRouter } = require('./modules/gyms/gym.routes');
+const bootstrapOnly = require('./middleware/bootstrapOnly');
+const { getUserAccountModel } = require('./modules/userAccounts/userAccount.model');
+const { createUserAccountService } = require('./modules/userAccounts/userAccount.service');
+const { createUserAccountRouter } = require('./modules/userAccounts/userAccount.routes');
+const { getGymAccessModel } = require('./modules/gymAccess/gymAccess.model');
+const { createGymAccessService } = require('./modules/gymAccess/gymAccess.service');
+const { createGymAccessRouter } = require('./modules/gymAccess/gymAccess.routes');
 
 function createApp({ config, logger = createLogger(config), database } = {}) {
   const app = express();
@@ -93,17 +100,12 @@ function createApp({ config, logger = createLogger(config), database } = {}) {
     if (!database?.connection) throw new Error('Bootstrap routes require a database connection.');
     const gymService = createGymService(getGymModel(database.connection));
     const branchService = createBranchService(getBranchModel(database.connection), gymService);
-    logger.warn('Unauthenticated Gym/Branch bootstrap routes enabled; local development only');
-    app.use('/api/v1/gyms', (req, res, next) => {
-      const address = req.socket.remoteAddress;
-      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address)) {
-        const error = new Error('Bootstrap routes are restricted to loopback clients.');
-        error.code = 'BOOTSTRAP_FORBIDDEN';
-        return next(error);
-      }
-      res.setHeader('X-API-Mode', 'development-bootstrap');
-      return next();
-    }, createGymRouter(gymService, branchService));
+    const userService = createUserAccountService(getUserAccountModel(database.connection));
+    const accessService = createGymAccessService(getGymAccessModel(database.connection), gymService, userService);
+    logger.warn('Unauthenticated bootstrap routes enabled; local development only');
+    app.use('/api/v1/user-accounts', bootstrapOnly, createUserAccountRouter(userService));
+    app.use('/api/v1/gyms/:gymId/access', bootstrapOnly, createGymAccessRouter(accessService));
+    app.use('/api/v1/gyms', bootstrapOnly, createGymRouter(gymService, branchService));
   }
 
   app.use(notFound);
