@@ -1,3 +1,5 @@
+const { createStaffService } = require('./modules/staff/staff.service');
+const { createStaffRouter } = require('./modules/staff/staff.routes');
 const { createDashboardService } = require('./modules/gymDashboard/dashboard.service');
 const { createDashboardRouter } = require('./modules/gymDashboard/dashboard.routes');
 const { createMemberSummaryService } = require('./modules/memberSummary/summary.service');
@@ -141,6 +143,9 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
       Branch: getBranchModel(database.connection),
     });
+    const staffService = createStaffService({ UserAccount: getUserAccountModel(database.connection),
+      GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection), authorizationService, logger });
+    app.use('/api/v1/gyms/:gymId/staff', createStaffRouter(staffService, authService, createAuthorizationMiddleware(authorizationService)));
     const dashboardService = createDashboardService({ Gym: getGymModel(database.connection), Branch: getBranchModel(database.connection),
       MemberProfile: getMemberProfileModel(database.connection), TrainerProfile: getTrainerProfileModel(database.connection),
       MembershipPlan: getMembershipPlanModel(database.connection), MemberSubscription: getMemberSubscriptionModel(database.connection),
