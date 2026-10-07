@@ -6,6 +6,7 @@ const publicErrors = {
   NOT_FOUND: [404, 'Route not found.'],
   GYM_NOT_FOUND: [404, 'Gym not found.'],
   MEMBER_NOT_FOUND: [404, 'Member not found.'],
+  TRAINER_NOT_FOUND: [404, 'Trainer not found.'],
   BRANCH_NOT_FOUND: [404, 'Branch not found.'],
   USER_ACCOUNT_NOT_FOUND: [404, 'User account not found.'],
   GYM_ACCESS_NOT_FOUND: [404, 'Gym access not found.'],
@@ -23,7 +24,9 @@ function errorHandler(error, req, res, next) {
   let message = 'An unexpected server error occurred.';
 
   if (error.code === 11000) {
-    if (error.keyPattern?.memberCode && error.keyPattern?.gymId) {
+    if (error.keyPattern?.trainerCode && error.keyPattern?.gymId) {
+      [status, code, message] = [409, 'DUPLICATE_TRAINER_CODE', 'Trainer code already exists in this gym.'];
+    } else if (error.keyPattern?.memberCode && error.keyPattern?.gymId) {
       [status, code, message] = [409, 'DUPLICATE_MEMBER_CODE', 'Member code already exists in this gym.'];
     } else if (error.keyPattern?.normalizedEmail) {
       [status, code, message] = [409, 'DUPLICATE_EMAIL', 'An account with this email already exists.'];

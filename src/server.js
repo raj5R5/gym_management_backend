@@ -94,6 +94,7 @@ async function startServer({
         database.connection.models.AuthSession.createIndexes(),
         database.connection.models.RefreshTokenRecord.createIndexes(),
         database.connection.models.MemberProfile.createIndexes(),
+        database.connection.models.TrainerProfile.createIndexes(),
       ]);
     }
     if (config.enableBootstrapRoutes && ['development', 'test'].includes(config.nodeEnv)) {

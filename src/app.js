@@ -1,4 +1,7 @@
 const express = require('express');
+const { getTrainerProfileModel } = require('./modules/trainers/trainer.model');
+const { createTrainerService } = require('./modules/trainers/trainer.service');
+const { createTrainerRouter } = require('./modules/trainers/trainer.routes');
 const { getMemberProfileModel } = require('./modules/members/member.model');
 const { createMemberService } = require('./modules/members/member.service');
 const { createMemberRouter } = require('./modules/members/member.routes');
@@ -122,6 +125,10 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
     const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
     app.use('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    const trainerService = createTrainerService({ TrainerProfile: getTrainerProfileModel(database.connection),
+      Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
+    app.use('/api/v1/gyms/:gymId/trainers', createTrainerRouter(trainerService, authService,
       createAuthorizationMiddleware(authorizationService)));
   }
 
