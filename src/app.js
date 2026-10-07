@@ -1,4 +1,7 @@
 const express = require('express');
+const { getTrainerMemberAssignmentModel } = require('./modules/trainerAssignments/assignment.model');
+const { createAssignmentService } = require('./modules/trainerAssignments/assignment.service');
+const { createAssignmentRouter } = require('./modules/trainerAssignments/assignment.routes');
 const { getTrainerProfileModel } = require('./modules/trainers/trainer.model');
 const { createTrainerService } = require('./modules/trainers/trainer.service');
 const { createTrainerRouter } = require('./modules/trainers/trainer.routes');
@@ -129,6 +132,13 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
     const trainerService = createTrainerService({ TrainerProfile: getTrainerProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
     app.use('/api/v1/gyms/:gymId/trainers', createTrainerRouter(trainerService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    const assignmentService = createAssignmentService({
+      TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
+      TrainerProfile: getTrainerProfileModel(database.connection), MemberProfile: getMemberProfileModel(database.connection),
+      authorizationService,
+    });
+    app.use('/api/v1/gyms/:gymId/trainer-assignments', createAssignmentRouter(assignmentService, authService,
       createAuthorizationMiddleware(authorizationService)));
   }
 
