@@ -1,3 +1,5 @@
+const { createDashboardService } = require('./modules/gymDashboard/dashboard.service');
+const { createDashboardRouter } = require('./modules/gymDashboard/dashboard.routes');
 const { createMemberSummaryService } = require('./modules/memberSummary/summary.service');
 const { createMemberSummaryRouter } = require('./modules/memberSummary/summary.routes');
 const { getAttendanceModel } = require('./modules/attendance/attendance.model');
@@ -139,6 +141,12 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
       Branch: getBranchModel(database.connection),
     });
+    const dashboardService = createDashboardService({ Gym: getGymModel(database.connection), Branch: getBranchModel(database.connection),
+      MemberProfile: getMemberProfileModel(database.connection), TrainerProfile: getTrainerProfileModel(database.connection),
+      MembershipPlan: getMembershipPlanModel(database.connection), MemberSubscription: getMemberSubscriptionModel(database.connection),
+      Payment: getPaymentModel(database.connection), Attendance: getAttendanceModel(database.connection), authorizationService });
+    app.use('/api/v1/gyms/:gymId/dashboard', createDashboardRouter(dashboardService, authService,
+      createAuthorizationMiddleware(authorizationService)));
     const summaryService = createMemberSummaryService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), TrainerProfile: getTrainerProfileModel(database.connection),
       TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection), MemberSubscription: getMemberSubscriptionModel(database.connection),
