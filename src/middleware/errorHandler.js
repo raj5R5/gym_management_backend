@@ -1,6 +1,7 @@
 const publicErrors = {
   INVALID_CREDENTIALS: [401, 'Invalid email or password.'],
   INVALID_AUTHENTICATION: [401, 'Authentication is invalid or expired.'],
+  FORBIDDEN: [403, 'You do not have permission to perform this operation.'],
   PASSWORD_ALREADY_SET: [409, 'Password has already been provisioned.'],
   NOT_FOUND: [404, 'Route not found.'],
   GYM_NOT_FOUND: [404, 'Gym not found.'],
