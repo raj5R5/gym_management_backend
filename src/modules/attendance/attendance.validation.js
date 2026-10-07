@@ -10,4 +10,7 @@ const attendanceListQuery = listQuery.extend({ memberId: objectId.optional(), br
   checkInFrom: timestamp.optional(), checkInTo: timestamp.optional() }).refine((value) =>
   !value.checkInFrom || !value.checkInTo || Date.parse(value.checkInFrom) <= Date.parse(value.checkInTo));
 const attendanceListInput = attendanceListQuery.safeExtend({ page: z.number().int().min(1).max(10000), limit: z.number().int().min(1).max(100) });
-module.exports = { statuses, checkIn, checkOut, attendanceParams, attendanceListQuery, attendanceListInput };
+const attendanceTodayQuery = listQuery.extend({ memberId: objectId.optional(), branchId: objectId.optional(),
+  status: z.enum(['open', 'completed']).optional() });
+const attendanceTodayInput = attendanceTodayQuery.extend({ page: z.number().int().min(1).max(10000), limit: z.number().int().min(1).max(100) });
+module.exports = { statuses, checkIn, checkOut, attendanceParams, attendanceListQuery, attendanceListInput, attendanceTodayQuery, attendanceTodayInput };

@@ -15,6 +15,7 @@ mandatory. Members are denied; no self-service endpoint is introduced.
 | POST | /check-in | Record a new open visit |
 | POST | /:attendanceId/check-out | Complete an open visit |
 | GET | / | Bounded history |
+| GET | /today | Gym-local daily staff operations |
 | GET | /:attendanceId | Individual visit |
 
 Check-in accepts exactly:
@@ -142,3 +143,108 @@ creating a negative duration. Joined offset pagination is not a durable snapshot
 Database failures produce sanitized existing 500 envelopes and deny the operation.
 Tests use owned temporary MongoDB databases, including real concurrency and index
 checks; no real .env or development/production database is used.
+
+
+## Daily staff operations — Milestone 19
+
+`GET /api/v1/gyms/:gymId/attendance/today` returns today's operational activity,
+with the same authenticated active-account/session, active GymAccess and active
+Gym requirements. Admins see their authorized gym; trainers resolve exactly one
+active profile from the authenticated account and see only members with a
+**current active assignment**. Members are denied. Assignment changes affect
+read-time access to historical visits without rewriting those visits.
+
+Only `branchId`, `memberId`, `status`, `page` and `limit` are accepted. Status is
+`open` or `completed`; cancelled visits are excluded. IDs, unknown fields,
+operators, duplicate query values and pagination are strictly validated. Page
+and limit follow existing conventions: defaults 1 and 20, maxima 10000 and 100.
+Member/branch filters require existing same-gym references; foreign/missing IDs
+return the existing 404 codes. A trainer's explicit unassigned member filter
+returns MEMBER_NOT_FOUND; branch and status filters only narrow their assigned
+result set. No trainerId, userId, date override, search or arbitrary filters exist.
+
+Today is the calendar day in `Gym.settings.timezone`, with the dashboard's
+explicit UTC fallback when timezone is absent. Invalid persisted timezones fail
+safely, as on the dashboard. The endpoint reuses the dashboard's native Intl
+calendar-label and MongoDB timezone-boundary conversion. Each local midnight is
+resolved independently, including 23/25-hour DST days, and the query uses
+`startOfToday <= checkInAt < endOfToday`. Server-local timezone, updatedAt and
+subscription eligibility dates do not classify attendance. Stored timestamps
+remain UTC. The subscription check-in eligibility policy is unchanged.
+
+Response shape (inside the existing envelope):
+
+```json
+{
+  "success": true,
+  "data": {
+    "date": "2026-10-07",
+    "timezone": "Asia/Kolkata",
+    "summary": {
+      "totalVisits": 1,
+      "completedVisits": 0,
+      "currentlyCheckedIn": 1,
+      "uniqueMembers": 1
+    },
+    "visits": [{
+      "id": "<attendanceId>",
+      "memberId": "<memberId>",
+      "memberCode": "ME01",
+      "memberName": "Alex River",
+      "branchId": "<branchId>",
+      "branchName": "Main",
+      "subscriptionId": "<subscriptionId>",
+      "checkInAt": "2026-10-07T04:00:00.000Z",
+      "checkOutAt": null,
+      "status": "open",
+      "durationMs": null
+    }]
+  },
+  "meta": {
+    "requestId": "<requestId>",
+    "pagination": { "page": 1, "limit": 20, "total": 1 }
+  }
+}
+```
+
+`totalVisits` counts open/completed visits in the full authorized filtered day;
+`completedVisits` counts completed visits; `currentlyCheckedIn` counts today's
+open visits; `uniqueMembers` counts distinct members across those visits. All
+filters, including status, apply equally to summary and rows. Counts are not
+restricted to the returned page. A member with multiple completed visits counts
+once in uniqueMembers. The existing unique-open index ensures one open visit per
+member/gym. Open visits from earlier days do not appear here; unlike the gym
+dashboard, this endpoint's currentlyCheckedIn is confined to today's window.
+
+Visits sort by checkInAt descending and _id descending, with explicit field
+allowlists. Completed duration is derived integer milliseconds; open checkout
+and duration are null. No recorder account ID, contacts, passwords, tokens,
+Mongo internals or unrelated private fields are returned. Standard errors and
+Cache-Control: no-store are retained.
+
+Historical display follows the recorded member, branch and subscription IDs,
+not the member's current branch. Member names/codes and branch names are current
+display values, not historical snapshots. Inactive members/branches and expired
+or cancelled subscriptions do not remove otherwise valid history. Even an
+inactive historical branch can be selected by a same-gym branch filter. Current
+trainer assignments still control trainer access.
+
+The existing tenancy/reference checks are reused: missing/foreign member or
+branch references and missing/foreign/wrong-member subscription references are
+excluded from both rows and counts. Malformed returned lifecycle/display data
+fails safely with a sanitized error. No repair writes occur. This conservative
+exclusion can undercount corrupted data.
+
+One scoped Attendance aggregation performs joins and facets for pagination,
+summary counts and distinct members. Gym timezone resolution is constant-size;
+there are no per-visit queries. Existing gym/checkInAt, status/checkInAt,
+branch/checkInAt and member/checkInAt indexes support the window/filter scans;
+reference joins use existing indexes. No model, collection, index, counters,
+cache or dependency is added. No attendance or other domain writes occur.
+
+The view is operational, not a durable transactional snapshot. Offset pagination
+can shift between requests, and administrative/assignment changes are checked
+at lookup time rather than locked for the whole request. Large daily volumes may
+need measured query optimization. Old open visits remain open until an existing
+explicit checkout; no automatic checkout, jobs or invented lifecycle rules are
+introduced. Tests use isolated owned MongoDB databases, never real .env data.

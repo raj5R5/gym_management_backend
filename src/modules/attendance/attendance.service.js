@@ -1,6 +1,7 @@
 const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
-const { checkIn, checkOut, attendanceListInput } = require('./attendance.validation');
+const { checkIn, checkOut, attendanceListInput, attendanceTodayInput } = require('./attendance.validation');
+const { dashboardPeriod } = require('../gymDashboard/dashboard.period');
 function fail(code) { const error = new Error('Attendance operation failed.'); error.code = code; throw error; }
 function parse(schema, input) { const result = schema.safeParse(input); if (!result.success) fail('VALIDATION_ERROR'); return result.data; }
 function dto(record) {
@@ -14,7 +15,7 @@ function dto(record) {
     recordedByUserId: String(record.recordedByUserId), createdAt: record.createdAt, updatedAt: record.updatedAt };
 }
 function createAttendanceService({ Attendance, MemberProfile, Branch, MemberSubscription, MembershipPlan,
-  TrainerProfile, TrainerMemberAssignment, authorizationService }) {
+  TrainerProfile, TrainerMemberAssignment, Gym, authorizationService, clock = () => new Date() }) {
   async function scope(auth, authorization) {
     authorizationService.requireRoles(auth, authorization, ['admin', 'trainer'], authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
@@ -28,11 +29,11 @@ function createAttendanceService({ Attendance, MemberProfile, Branch, MemberSubs
     if (selected.trainerId && !await TrainerMemberAssignment.exists({ gymId: selected.gymId,
       trainerId: selected.trainerId, memberId, status: 'active' })) fail('MEMBER_NOT_FOUND');
   }
-  function relationshipStages(selected) {
+  function relationshipStages(selected, display = false) {
     const gymId = new Types.ObjectId(selected.gymId);
     const stages = [[MemberProfile, 'memberId', 'member'], [Branch, 'branchId', 'branch']].flatMap(([model, field, alias]) => [
       { $lookup: { from: model.collection.name, localField: field, foreignField: '_id',
-        pipeline: [{ $match: { gymId } }, { $project: { _id: 1 } }], as: alias } }, { $unwind: `$${alias}` },
+        pipeline: [{ $match: { gymId } }, { $project: display ? (alias === 'member' ? { _id: 1, memberCode: 1, firstName: 1, lastName: 1 } : { _id: 1, name: 1 }) : { _id: 1 } }], as: alias } }, { $unwind: `$${alias}` },
     ]);
     stages.push({ $lookup: { from: MemberSubscription.collection.name, let: { subscriptionId: '$subscriptionId', memberId: '$memberId' },
       pipeline: [{ $match: { gymId, $expr: { $and: [{ $eq: ['$_id', '$$subscriptionId'] }, { $eq: ['$memberId', '$$memberId'] }] } } },
@@ -48,6 +49,46 @@ function createAttendanceService({ Attendance, MemberProfile, Branch, MemberSubs
     if (!records.length) fail('ATTENDANCE_NOT_FOUND'); return records[0];
   }
   return {
+    async today(auth, authorization, query) {
+      const selected = await scope(auth, authorization);
+      const { page, limit, memberId, branchId, status } = parse(attendanceTodayInput, query);
+      if (branchId && !await Branch.exists({ _id: branchId, gymId: selected.gymId })) fail('BRANCH_NOT_FOUND');
+      if (memberId) {
+        await assigned(selected, memberId);
+        if (!await MemberProfile.exists({ _id: memberId, gymId: selected.gymId })) fail('MEMBER_NOT_FOUND');
+      }
+      const gym = await Gym.findOne({ _id: selected.gymId, status: 'active' }).select('settings.timezone').lean();
+      if (!gym) fail('FORBIDDEN');
+      const timezone = gym.settings?.timezone ?? 'UTC';
+      if (typeof timezone !== 'string' || !timezone) fail('INVALID_ATTENDANCE_STATE');
+      const period = await dashboardPeriod(Gym, new Types.ObjectId(selected.gymId), timezone, {}, clock());
+      const filter = { gymId: new Types.ObjectId(selected.gymId), checkInAt: { $gte: period.start, $lt: period.end },
+        status: status ?? { $in: ['open', 'completed'] },
+        ...(memberId ? { memberId: new Types.ObjectId(memberId) } : {}), ...(branchId ? { branchId: new Types.ObjectId(branchId) } : {}) };
+      const [result] = await Attendance.aggregate([{ $match: filter }, ...relationshipStages(selected, true),
+        { $facet: {
+          records: [{ $sort: { checkInAt: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit }],
+          summary: [{ $group: { _id: null, totalVisits: { $sum: 1 },
+            completedVisits: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            currentlyCheckedIn: { $sum: { $cond: [{ $eq: ['$status', 'open'] }, 1, 0] } } } }],
+          unique: [{ $group: { _id: '$memberId' } }, { $count: 'total' }],
+        } }]);
+      const counts = result.summary[0];
+      const summary = { totalVisits: counts?.totalVisits ?? 0, completedVisits: counts?.completedVisits ?? 0,
+        currentlyCheckedIn: counts?.currentlyCheckedIn ?? 0, uniqueMembers: result.unique[0]?.total ?? 0 };
+      if (Object.values(summary).some((value) => !Number.isSafeInteger(value) || value < 0)) fail('INVALID_ATTENDANCE_STATE');
+      const visits = result.records.map((record) => {
+        const visit = dto(record);
+        if (visit.status === 'completed' && (!Number.isSafeInteger(visit.durationMs) || visit.durationMs < 0)) fail('INVALID_ATTENDANCE_STATE');
+        if (![record.member.memberCode, record.member.firstName, record.member.lastName, record.branch.name]
+          .every((value) => typeof value === 'string' && value.length)) fail('INVALID_ATTENDANCE_STATE');
+        return { id: visit.id, memberId: visit.memberId, memberCode: record.member.memberCode,
+          memberName: `${record.member.firstName} ${record.member.lastName}`, branchId: visit.branchId, branchName: record.branch.name,
+          subscriptionId: visit.subscriptionId, checkInAt: visit.checkInAt, checkOutAt: visit.checkOutAt,
+          status: visit.status, durationMs: visit.durationMs };
+      });
+      return { data: { date: period.dto.from, timezone, summary, visits }, pagination: { page, limit, total: summary.totalVisits } };
+    },
     async authorizeRead(auth, authorization, attendanceId) {
       const selected = await scope(auth, authorization); if (attendanceId !== undefined) await existing(selected, attendanceId);
     },

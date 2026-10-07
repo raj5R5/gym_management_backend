@@ -184,7 +184,7 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       authorizationService });
     app.use('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
       createAuthorizationMiddleware(authorizationService)));
-    const attendanceService = createAttendanceService({ Attendance: getAttendanceModel(database.connection),
+    const attendanceService = createAttendanceService({ Gym: getGymModel(database.connection), Attendance: getAttendanceModel(database.connection),
       MemberProfile: getMemberProfileModel(database.connection), Branch: getBranchModel(database.connection),
       MemberSubscription: getMemberSubscriptionModel(database.connection), MembershipPlan: getMembershipPlanModel(database.connection),
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),

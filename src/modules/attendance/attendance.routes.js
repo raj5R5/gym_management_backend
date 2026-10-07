@@ -16,6 +16,7 @@ function createAttendanceRouter(service, authService, authorization) {
   router.post('/check-in', validate({ body: schemas.checkIn }), controller.checkIn);
   router.post('/:attendanceId/check-out', validate({ params: schemas.attendanceParams, body: schemas.checkOut }), readGuard, controller.checkOut);
   router.get('/', validate({ query: schemas.attendanceListQuery }), readGuard, controller.list);
+  router.get('/today', validate({ query: schemas.attendanceTodayQuery }), controller.today);
   router.get('/:attendanceId', validate({ params: schemas.attendanceParams }), readGuard, controller.get);
   return router;
 }
