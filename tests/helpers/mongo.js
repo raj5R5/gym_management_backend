@@ -8,7 +8,7 @@ const net = require('node:net');
 const { setTimeout: delay } = require('node:timers/promises');
 const { randomUUID } = require('node:crypto');
 
-async function startTestMongo() {
+async function startTestMongo({ replicaSet = false } = {}) {
   // Never read .env, MONGO_URI, or any existing database. Own process + temporary data only.
   const cached = join(homedir(), '.cache/gym-management-tests/mongodb/bin/mongod');
   let binary = process.env.MONGOD_BINARY;
@@ -25,6 +25,7 @@ async function startTestMongo() {
   const child = spawn(binary, [
     '--bind_ip', '127.0.0.1', '--port', String(port), '--dbpath', directory,
     '--logpath', join(directory, 'mongodb.log'), '--quiet',
+    ...(replicaSet ? ['--replSet', 'gym_tests'] : []),
   ], { stdio: 'ignore' });
   const closed = new Promise((resolve) => child.once('close', resolve));
   let spawnError;
@@ -58,7 +59,21 @@ async function startTestMongo() {
       await delay(100);
     }
     if (!listening) throw new Error('Isolated test MongoDB startup timed out.');
-    return { uri: `mongodb://127.0.0.1:${port}/gym_tests_${randomUUID().replaceAll('-', '')}`, stop };
+    if (replicaSet) {
+      const { MongoClient } = require('mongoose').mongo;
+      const client = new MongoClient(`mongodb://127.0.0.1:${port}/?directConnection=true`);
+      try {
+        await client.connect();
+        await client.db('admin').command({ replSetInitiate: { _id: 'gym_tests', members: [{ _id: 0, host: `127.0.0.1:${port}` }] } });
+        let primary = false;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if ((await client.db('admin').command({ hello: 1 })).isWritablePrimary) { primary = true; break; }
+          await delay(100);
+        }
+        if (!primary) throw new Error('Isolated test replica set election timed out.');
+      } finally { await client.close(); }
+    }
+    return { uri: `mongodb://127.0.0.1:${port}/gym_tests_${randomUUID().replaceAll('-', '')}${replicaSet ? '?replicaSet=gym_tests' : ''}`, stop };
   } catch (error) {
     await stop();
     throw error;
