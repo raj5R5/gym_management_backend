@@ -1,3 +1,6 @@
+const { getAttendanceModel } = require('./modules/attendance/attendance.model');
+const { createAttendanceService } = require('./modules/attendance/attendance.service');
+const { createAttendanceRouter } = require('./modules/attendance/attendance.routes');
 const express = require('express');
 const { getPaymentModel } = require('./modules/payments/payment.model');
 const { createPaymentService } = require('./modules/payments/payment.service');
@@ -163,6 +166,13 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
       authorizationService });
     app.use('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    const attendanceService = createAttendanceService({ Attendance: getAttendanceModel(database.connection),
+      MemberProfile: getMemberProfileModel(database.connection), Branch: getBranchModel(database.connection),
+      MemberSubscription: getMemberSubscriptionModel(database.connection), MembershipPlan: getMembershipPlanModel(database.connection),
+      TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
+      authorizationService });
+    app.use('/api/v1/gyms/:gymId/attendance', createAttendanceRouter(attendanceService, authService,
       createAuthorizationMiddleware(authorizationService)));
   }
 

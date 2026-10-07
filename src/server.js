@@ -99,6 +99,7 @@ async function startServer({
         database.connection.models.MembershipPlan.createIndexes(),
         database.connection.models.MemberSubscription.createIndexes(),
         database.connection.models.Payment.createIndexes(),
+        database.connection.models.Attendance.createIndexes(),
       ]);
     }
     if (config.enableBootstrapRoutes && ['development', 'test'].includes(config.nodeEnv)) {

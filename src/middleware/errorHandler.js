@@ -9,6 +9,13 @@ const publicErrors = {
   TRAINER_NOT_FOUND: [404, 'Trainer not found.'],
   ASSIGNMENT_NOT_FOUND: [404, 'Assignment not found.'],
   PLAN_NOT_FOUND: [404, 'Membership plan not found.'],
+  ATTENDANCE_NOT_FOUND: [404, 'Attendance not found.'],
+  ATTENDANCE_BRANCH_INACTIVE: [409, 'Branch is not active for check-in.'],
+  ATTENDANCE_BRANCH_MISMATCH: [409, 'Member is not assigned to this branch.'],
+  ATTENDANCE_MEMBERSHIP_REQUIRED: [409, 'A currently valid subscription is required for check-in.'],
+  ATTENDANCE_MEMBERSHIP_AMBIGUOUS: [409, 'Membership eligibility is inconsistent; check-in is denied.'],
+  ATTENDANCE_ALREADY_OPEN: [409, 'Member already has an open visit in this gym.'],
+  ATTENDANCE_NOT_OPEN: [409, 'Attendance is no longer open.'],
   PAYMENT_NOT_FOUND: [404, 'Payment not found.'],
   PAYMENT_MEMBER_MISMATCH: [400, 'Subscription does not belong to the specified member.'],
   PAYMENT_SUBSCRIPTION_CANCELLED: [409, 'Cannot record payment against a cancelled subscription.'],
@@ -36,7 +43,9 @@ function errorHandler(error, req, res, next) {
   let message = 'An unexpected server error occurred.';
 
   if (error.code === 11000) {
-    if (error.keyPattern?.gymId && error.keyPattern?.paymentMethod && error.keyPattern?.transactionReference) {
+    if (error.keyPattern?.gymId && error.keyPattern?.memberId && !error.keyPattern?.trainerId) {
+      [status, code, message] = [409, 'ATTENDANCE_ALREADY_OPEN', 'Member already has an open visit in this gym.'];
+    } else if (error.keyPattern?.gymId && error.keyPattern?.paymentMethod && error.keyPattern?.transactionReference) {
       [status, code, message] = [409, 'DUPLICATE_PAYMENT_REFERENCE', 'A successful payment with this reference already exists for this method in this gym.'];
     } else if (error.keyPattern?.gymId && error.keyPattern?.normalizedName) {
       [status, code, message] = [409, 'DUPLICATE_PLAN_NAME', 'Plan name already exists in this gym.'];
