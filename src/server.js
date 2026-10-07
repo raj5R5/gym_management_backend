@@ -93,6 +93,7 @@ async function startServer({
       await Promise.all([
         database.connection.models.AuthSession.createIndexes(),
         database.connection.models.RefreshTokenRecord.createIndexes(),
+        database.connection.models.MemberProfile.createIndexes(),
       ]);
     }
     if (config.enableBootstrapRoutes && ['development', 'test'].includes(config.nodeEnv)) {

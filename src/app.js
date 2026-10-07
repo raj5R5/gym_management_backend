@@ -1,4 +1,9 @@
 const express = require('express');
+const { getMemberProfileModel } = require('./modules/members/member.model');
+const { createMemberService } = require('./modules/members/member.service');
+const { createMemberRouter } = require('./modules/members/member.routes');
+const { createAuthorizationService } = require('./modules/authorization/authorization.service');
+const { createAuthorizationMiddleware } = require('./middleware/authorize');
 const cookieParser = require('cookie-parser');
 const { getAuthSessionModel } = require('./modules/auth/authSession.model');
 const { getRefreshTokenModel } = require('./modules/auth/refreshToken.model');
@@ -110,6 +115,14 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       RefreshTokenRecord: getRefreshTokenModel(database.connection), config, logger,
     });
     app.use('/api/v1/auth', createAuthRouter(authService, config));
+    const authorizationService = createAuthorizationService({
+      GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
+      Branch: getBranchModel(database.connection),
+    });
+    const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
+      Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
+    app.use('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,
+      createAuthorizationMiddleware(authorizationService)));
   }
 
   // Temporary unauthenticated bootstrap functionality, never a production authorization path.
