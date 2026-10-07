@@ -1,4 +1,7 @@
 const express = require('express');
+const { getMembershipPlanModel } = require('./modules/membershipPlans/plan.model');
+const { createPlanService } = require('./modules/membershipPlans/plan.service');
+const { createPlanRouter } = require('./modules/membershipPlans/plan.routes');
 const { getTrainerMemberAssignmentModel } = require('./modules/trainerAssignments/assignment.model');
 const { createAssignmentService } = require('./modules/trainerAssignments/assignment.service');
 const { createAssignmentRouter } = require('./modules/trainerAssignments/assignment.routes');
@@ -139,6 +142,9 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       authorizationService,
     });
     app.use('/api/v1/gyms/:gymId/trainer-assignments', createAssignmentRouter(assignmentService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    const planService = createPlanService({ MembershipPlan: getMembershipPlanModel(database.connection), authorizationService });
+    app.use('/api/v1/gyms/:gymId/membership-plans', createPlanRouter(planService, authService,
       createAuthorizationMiddleware(authorizationService)));
   }
 
