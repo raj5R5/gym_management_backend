@@ -1,3 +1,5 @@
+const { createMemberSummaryService } = require('./modules/memberSummary/summary.service');
+const { createMemberSummaryRouter } = require('./modules/memberSummary/summary.routes');
 const { getAttendanceModel } = require('./modules/attendance/attendance.model');
 const { createAttendanceService } = require('./modules/attendance/attendance.service');
 const { createAttendanceRouter } = require('./modules/attendance/attendance.routes');
@@ -137,6 +139,13 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
       Branch: getBranchModel(database.connection),
     });
+    const summaryService = createMemberSummaryService({ MemberProfile: getMemberProfileModel(database.connection),
+      Branch: getBranchModel(database.connection), TrainerProfile: getTrainerProfileModel(database.connection),
+      TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection), MemberSubscription: getMemberSubscriptionModel(database.connection),
+      MembershipPlan: getMembershipPlanModel(database.connection), Payment: getPaymentModel(database.connection),
+      Attendance: getAttendanceModel(database.connection), authorizationService });
+    app.use('/api/v1/gyms/:gymId/members', createMemberSummaryRouter(summaryService, authService,
+      createAuthorizationMiddleware(authorizationService)));
     const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
     app.use('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,
