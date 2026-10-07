@@ -1,4 +1,7 @@
 const express = require('express');
+const { getPaymentModel } = require('./modules/payments/payment.model');
+const { createPaymentService } = require('./modules/payments/payment.service');
+const { createPaymentRouter } = require('./modules/payments/payment.routes');
 const { getMemberSubscriptionModel } = require('./modules/subscriptions/subscription.model');
 const { createSubscriptionService } = require('./modules/subscriptions/subscription.service');
 const { createSubscriptionRouter } = require('./modules/subscriptions/subscription.routes');
@@ -154,6 +157,12 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
       authorizationService });
     app.use('/api/v1/gyms/:gymId/subscriptions', createSubscriptionRouter(subscriptionService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    const paymentService = createPaymentService({ Payment: getPaymentModel(database.connection),
+      MemberSubscription: getMemberSubscriptionModel(database.connection), MemberProfile: getMemberProfileModel(database.connection),
+      TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
+      authorizationService });
+    app.use('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
       createAuthorizationMiddleware(authorizationService)));
   }
 

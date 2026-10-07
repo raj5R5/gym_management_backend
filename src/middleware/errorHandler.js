@@ -9,6 +9,11 @@ const publicErrors = {
   TRAINER_NOT_FOUND: [404, 'Trainer not found.'],
   ASSIGNMENT_NOT_FOUND: [404, 'Assignment not found.'],
   PLAN_NOT_FOUND: [404, 'Membership plan not found.'],
+  PAYMENT_NOT_FOUND: [404, 'Payment not found.'],
+  PAYMENT_MEMBER_MISMATCH: [400, 'Subscription does not belong to the specified member.'],
+  PAYMENT_SUBSCRIPTION_CANCELLED: [409, 'Cannot record payment against a cancelled subscription.'],
+  PAYMENT_OVERPAYMENT: [409, 'Payment exceeds the remaining subscription amount.'],
+  PAYMENT_STORAGE_UNAVAILABLE: [503, 'Payment recording requires transaction-capable database storage.'],
   SUBSCRIPTION_NOT_FOUND: [404, 'Subscription not found.'],
   SUBSCRIPTION_OVERLAP: [409, 'Subscription period overlaps an existing non-cancelled subscription.'],
   SUBSCRIPTION_STORAGE_UNAVAILABLE: [503, 'Subscription creation requires transaction-capable database storage.'],
@@ -29,7 +34,9 @@ function errorHandler(error, req, res, next) {
   let message = 'An unexpected server error occurred.';
 
   if (error.code === 11000) {
-    if (error.keyPattern?.gymId && error.keyPattern?.normalizedName) {
+    if (error.keyPattern?.gymId && error.keyPattern?.paymentMethod && error.keyPattern?.transactionReference) {
+      [status, code, message] = [409, 'DUPLICATE_PAYMENT_REFERENCE', 'A successful payment with this reference already exists for this method in this gym.'];
+    } else if (error.keyPattern?.gymId && error.keyPattern?.normalizedName) {
       [status, code, message] = [409, 'DUPLICATE_PLAN_NAME', 'Plan name already exists in this gym.'];
     } else if (error.keyPattern?.gymId && error.keyPattern?.trainerId && error.keyPattern?.memberId) {
       [status, code, message] = [409, 'DUPLICATE_ACTIVE_ASSIGNMENT', 'An active assignment already exists for this relationship.'];
