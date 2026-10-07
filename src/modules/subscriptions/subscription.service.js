@@ -1,15 +1,17 @@
 const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
 const { createPlan } = require('../membershipPlans/plan.validation');
-const { today, calendarDate, createSubscription, cancelSubscription, subscriptionListInput } = require('./subscription.validation');
+const { today, calendarDate, createSubscription, renewSubscription, cancelSubscription, subscriptionListInput } = require('./subscription.validation');
 function fail(code) { const error = new Error('Subscription operation failed.'); error.code = code; throw error; }
 function parse(schema, value) {
   const result = schema.safeParse(value); if (!result.success) fail('VALIDATION_ERROR'); return result.data;
 }
 function midnight() { return new Date(`${today()}T00:00:00.000Z`); }
 function dto(record, now = midnight()) {
-  if (record.startDate > now || !['active', 'expired', 'cancelled'].includes(record.status)) fail('INVALID_SUBSCRIPTION_STATE');
+  if (!['active', 'expired', 'cancelled'].includes(record.status)) fail('INVALID_SUBSCRIPTION_STATE');
   return { id: String(record._id), gymId: String(record.gymId), memberId: String(record.memberId),
+    previousSubscriptionId: record.previousSubscriptionId ? String(record.previousSubscriptionId) : null,
+    isCurrentlyActive: record.status !== 'cancelled' && record.startDate <= now && record.endDate > now,
     membershipPlanId: String(record.membershipPlanId), startDate: record.startDate.toISOString().slice(0, 10),
     endDate: record.endDate.toISOString().slice(0, 10),
     status: record.status === 'cancelled' ? 'cancelled' : record.endDate <= now ? 'expired' : 'active',
@@ -36,6 +38,14 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
       { $lookup: { from: model.collection.name, localField: field, foreignField: '_id',
         pipeline: [{ $match: { gymId } }, { $project: { _id: 1 } }], as: alias } }, { $unwind: `$${alias}` },
     ]);
+    stages.push(
+      { $lookup: { from: MemberSubscription.collection.name,
+        let: { previousId: '$previousSubscriptionId', memberId: '$memberId', startDate: '$startDate' },
+        pipeline: [{ $match: { gymId, $expr: { $and: [{ $eq: ['$_id', '$$previousId'] },
+          { $eq: ['$memberId', '$$memberId'] }, { $lte: ['$endDate', '$$startDate'] }] } } }, { $project: { _id: 1 } }], as: 'predecessor' } },
+      { $match: { $or: [{ previousSubscriptionId: { $exists: false } }, { previousSubscriptionId: null },
+        { 'predecessor.0': { $exists: true } }] } },
+    );
     if (selected.trainerId) stages.push(
       { $lookup: { from: TrainerMemberAssignment.collection.name, localField: 'memberId', foreignField: 'memberId',
         pipeline: [{ $match: { gymId, trainerId: selected.trainerId, status: 'active' } }, { $limit: 1 }, { $project: { _id: 1 } }], as: 'assignment' } },
@@ -50,6 +60,38 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
     ]);
     if (!records.length) fail('SUBSCRIPTION_NOT_FOUND'); return records[0];
   }
+  async function transaction(work) {
+    const session = await MemberSubscription.db.startSession();
+    try {
+      return await session.withTransaction(() => work(session),
+        { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+    } catch (error) {
+      if (error.code === 20 || error.originalError?.code === 20) fail('SUBSCRIPTION_STORAGE_UNAVAILABLE');
+      throw error;
+    } finally { await session.endSession(); }
+  }
+  async function lockMember(gymId, memberId, session) {
+    // A real version write serializes all creation/renewal paths across processes.
+    const member = await MemberProfile.findOneAndUpdate({ _id: memberId, gymId },
+      { $inc: { __v: 1 } }, { session, returnDocument: 'after', timestamps: false }).select('_id status').lean();
+    if (!member) fail('MEMBER_NOT_FOUND'); if (member.status !== 'active') fail('FORBIDDEN');
+  }
+  async function insertPeriod(gymId, data, session) {
+    const plan = await MembershipPlan.findOne({ _id: data.membershipPlanId, gymId }).session(session).lean();
+    if (!plan) fail('PLAN_NOT_FOUND'); if (plan.status !== 'active') fail('FORBIDDEN');
+    parse(createPlan, { name: plan.name, durationDays: plan.durationDays, price: plan.price, status: plan.status });
+    const startDate = new Date(`${parse(calendarDate, data.startDate)}T00:00:00.000Z`);
+    const endDate = new Date(startDate); endDate.setUTCDate(endDate.getUTCDate() + plan.durationDays);
+    parse(calendarDate, endDate.toISOString().slice(0, 10));
+    const overlap = await MemberSubscription.exists({ gymId, memberId: data.memberId, status: { $ne: 'cancelled' },
+      startDate: { $lt: endDate }, endDate: { $gt: startDate } }).session(session);
+    if (overlap) fail('SUBSCRIPTION_OVERLAP');
+    const [record] = await MemberSubscription.create([{ gymId, memberId: data.memberId, membershipPlanId: data.membershipPlanId,
+      previousSubscriptionId: data.previousSubscriptionId, startDate, endDate, planNameSnapshot: plan.name,
+      durationDaysSnapshot: plan.durationDays, pricePaiseSnapshot: plan.price,
+      status: endDate <= midnight() ? 'expired' : 'active', notes: data.notes }], { session });
+    return dto(record.toObject());
+  }
   return {
     async authorizeRead(auth, authorization, subscriptionId) {
       const selected = await readScope(auth, authorization);
@@ -58,33 +100,36 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
     async create(auth, authorization, input) {
       const { gymId } = await scope(auth, authorization, ['admin']);
       const data = parse(createSubscription, input);
-      const session = await MemberSubscription.db.startSession();
-      try {
-        return await session.withTransaction(async () => {
-          // Serialize creation for this member using its existing version field.
-          // Real writes conflict across concurrent transactions; no-op writes do not suffice.
-          const member = await MemberProfile.findOneAndUpdate({ _id: data.memberId, gymId },
-            { $inc: { __v: 1 } }, { session, returnDocument: 'after', timestamps: false }).select('_id status').lean();
-          if (!member) fail('MEMBER_NOT_FOUND'); if (member.status !== 'active') fail('FORBIDDEN');
-          const plan = await MembershipPlan.findOne({ _id: data.membershipPlanId, gymId }).session(session).lean();
-          if (!plan) fail('PLAN_NOT_FOUND'); if (plan.status !== 'active') fail('FORBIDDEN');
-          // Fail safely if direct database writes introduced invalid commercial terms.
-          parse(createPlan, { name: plan.name, durationDays: plan.durationDays, price: plan.price, status: plan.status });
-          const startDate = new Date(`${data.startDate}T00:00:00.000Z`);
-          const endDate = new Date(startDate); endDate.setUTCDate(endDate.getUTCDate() + plan.durationDays);
-          parse(calendarDate, endDate.toISOString().slice(0, 10));
-          const overlap = await MemberSubscription.exists({ gymId, memberId: data.memberId, status: { $ne: 'cancelled' },
-            startDate: { $lt: endDate }, endDate: { $gt: startDate } }).session(session);
-          if (overlap) fail('SUBSCRIPTION_OVERLAP');
-          const [record] = await MemberSubscription.create([{ gymId, memberId: data.memberId, membershipPlanId: data.membershipPlanId,
-            startDate, endDate, planNameSnapshot: plan.name, durationDaysSnapshot: plan.durationDays,
-            pricePaiseSnapshot: plan.price, status: endDate <= midnight() ? 'expired' : 'active', notes: data.notes }], { session });
-          return dto(record.toObject());
-        }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
-      } catch (error) {
-        if (error.code === 20 || error.originalError?.code === 20) fail('SUBSCRIPTION_STORAGE_UNAVAILABLE');
-        throw error;
-      } finally { await session.endSession(); }
+      return transaction(async (session) => {
+        await lockMember(gymId, data.memberId, session);
+        return insertPeriod(gymId, data, session);
+      });
+    },
+    async renew(auth, authorization, subscriptionId, input) {
+      const { gymId } = await scope(auth, authorization, ['admin']);
+      const id = parse(objectId, subscriptionId); const data = parse(renewSubscription, input);
+      return transaction(async (session) => {
+        const previous = await MemberSubscription.findOne({ _id: id, gymId }).session(session).lean();
+        if (!previous) fail('SUBSCRIPTION_NOT_FOUND');
+        dto(previous); // Unknown lifecycle states must never authorize a renewal.
+        await lockMember(gymId, previous.memberId, session);
+        // Conflict with cancellation/payment writes without changing historical terms or timestamps.
+        const locked = await MemberSubscription.findOneAndUpdate({ _id: id, gymId },
+          { $inc: { __v: 1 } }, { session, returnDocument: 'after', timestamps: false });
+        if (!locked) fail('SUBSCRIPTION_NOT_FOUND');
+        if (previous.status === 'cancelled') fail('SUBSCRIPTION_CANCELLED');
+        if (previous.previousSubscriptionId) {
+          const predecessor = await MemberSubscription.exists({ _id: previous.previousSubscriptionId, gymId,
+            memberId: previous.memberId, endDate: { $lte: previous.startDate } }).session(session);
+          if (!predecessor) fail('SUBSCRIPTION_NOT_FOUND');
+        }
+        const successor = await MemberSubscription.exists({ gymId, previousSubscriptionId: id }).session(session);
+        if (successor) fail('SUBSCRIPTION_ALREADY_RENEWED');
+        const startDate = data.startDate ?? previous.endDate.toISOString().slice(0, 10);
+        if (startDate < previous.endDate.toISOString().slice(0, 10)) fail('SUBSCRIPTION_OVERLAP');
+        return insertPeriod(gymId, { memberId: previous.memberId, membershipPlanId: previous.membershipPlanId,
+          previousSubscriptionId: previous._id, startDate, notes: data.notes }, session);
+      });
     },
     async get(auth, authorization, subscriptionId) { return dto(await existing(await readScope(auth, authorization), subscriptionId)); },
     async list(auth, authorization, query) {
@@ -97,7 +142,6 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
       if (status === 'cancelled') filter.status = 'cancelled';
       else if (status) {
         filter.status = { $ne: 'cancelled' }; filter.endDate = status === 'expired' ? { $lte: now } : { $gt: now };
-        if (status === 'active') filter.startDate = { $lte: now };
       }
       const [result] = await MemberSubscription.aggregate([{ $match: filter }, ...relationshipStages(selected),
         { $facet: { records: [{ $sort: { createdAt: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit }], count: [{ $count: 'total' }] } }]);

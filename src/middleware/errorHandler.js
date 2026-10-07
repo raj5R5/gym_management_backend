@@ -15,6 +15,8 @@ const publicErrors = {
   PAYMENT_OVERPAYMENT: [409, 'Payment exceeds the remaining subscription amount.'],
   PAYMENT_STORAGE_UNAVAILABLE: [503, 'Payment recording requires transaction-capable database storage.'],
   SUBSCRIPTION_NOT_FOUND: [404, 'Subscription not found.'],
+  SUBSCRIPTION_ALREADY_RENEWED: [409, 'Subscription already has a direct successor. Renew the latest subscription instead.'],
+  SUBSCRIPTION_CANCELLED: [409, 'A cancelled subscription cannot be renewed.'],
   SUBSCRIPTION_OVERLAP: [409, 'Subscription period overlaps an existing non-cancelled subscription.'],
   SUBSCRIPTION_STORAGE_UNAVAILABLE: [503, 'Subscription creation requires transaction-capable database storage.'],
   BRANCH_NOT_FOUND: [404, 'Branch not found.'],

@@ -338,7 +338,8 @@ test('future existing ranges still participate in overlap checks and corrupt raw
     startDate: new Date(`${day(1)}T00:00:00Z`), endDate: new Date(`${day(31)}T00:00:00Z`), status: 'active',
     planNameSnapshot: 'Monthly', durationDaysSnapshot: 30, pricePaiseSnapshot: 150000 });
   error(await send('post', path(), token, input()), 409, 'SUBSCRIPTION_OVERLAP');
-  error(await send('get', path(), token), 500, 'INTERNAL_SERVER_ERROR'); // Future scheduling has no supported lifecycle in v1.
+  const future = await send('get', path(), token);
+  assert.equal(future.status, 200); assert.equal(future.body.data[0].isCurrentlyActive, false);
   await models.MembershipPlan.collection.updateOne({ _id: planA._id }, { $set: { price: 0.5 } });
   error(await send('post', path(), token, input({ memberId: String(memberOther._id) })), 400, 'VALIDATION_ERROR');
 });
@@ -387,6 +388,7 @@ test('standalone MongoDB rejects subscription creation safely without a nontrans
     await login(); const { auth, authorization } = await context();
     const standaloneService = createSubscriptionService({ ...localModels, authorizationService: createAuthorizationService(models) });
     await assert.rejects(standaloneService.create(auth, authorization, input()), { code: 'SUBSCRIPTION_STORAGE_UNAVAILABLE' });
+    await assert.rejects(standaloneService.renew(auth, authorization, missingId(), {}), { code: 'SUBSCRIPTION_STORAGE_UNAVAILABLE' });
     assert.equal(await localModels.MemberSubscription.countDocuments(), 0);
   } finally { await local.disconnect(); await standalone.stop(); }
 });

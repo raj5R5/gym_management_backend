@@ -8,6 +8,9 @@ function createSubscriptionController(service) {
       const result = await service.list(req.auth, req.authorization, req.validated.query);
       return send(req, res, result.data, 200, { pagination: result.pagination });
     },
+    async renew(req, res) {
+      return send(req, res, await service.renew(req.auth, req.authorization, req.validated.params.subscriptionId, req.validated.body), 201);
+    },
     async cancel(req, res) {
       return send(req, res, await service.cancel(req.auth, req.authorization, req.validated.params.subscriptionId, req.validated.body));
     },

@@ -16,6 +16,8 @@ function createSubscriptionRouter(service, authService, authorization) {
   router.post('/', authorization.requireRoles('admin'), validate({ body: schemas.createSubscription }), controller.create);
   router.get('/', authorization.requireRoles('admin', 'trainer'), validate({ query: schemas.subscriptionListQuery }), readGuard, controller.list);
   router.get('/:subscriptionId', authorization.requireRoles('admin', 'trainer'), validate({ params: schemas.subscriptionParams }), readGuard, controller.get);
+  router.post('/:subscriptionId/renew', authorization.requireRoles('admin'),
+    validate({ params: schemas.subscriptionParams, body: schemas.renewSubscription }), controller.renew);
   router.patch('/:subscriptionId/cancel', authorization.requireRoles('admin'),
     validate({ params: schemas.subscriptionParams, body: schemas.cancelSubscription }), controller.cancel);
   return router;

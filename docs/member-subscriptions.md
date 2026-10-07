@@ -1,4 +1,4 @@
-# Member Subscriptions — Milestone 13
+# Member Subscriptions — Milestones 13 and 15
 
 MemberSubscription records a member's membership period and its historical
 commercial terms. MembershipPlan is a reusable template, not the authoritative
@@ -11,6 +11,8 @@ source for an existing subscription's name, duration or price.
 | gymId | Required immutable Gym reference, derived from authorized URL scope |
 | memberId | Required immutable MemberProfile reference in that gym |
 | membershipPlanId | Required immutable MembershipPlan reference in that gym |
+| previousSubscriptionId | Optional immutable immediate predecessor in the same gym and for the same member; absent in older records |
+| isCurrentlyActive | Response-only boolean: non-cancelled and startDate <= current UTC date < endDate |
 | startDate / endDate | Required immutable UTC-midnight dates, returned as YYYY-MM-DD |
 | planNameSnapshot | Required immutable plan name copied at creation |
 | durationDaysSnapshot | Required immutable integer, 1–3650 days |
@@ -38,9 +40,13 @@ endDate is startDate plus durationDaysSnapshot using UTC calendar arithmetic.
 For example, a 30-day period starting 2024-02-01 ends 2024-03-02. Server timezone
 and daylight-saving changes do not affect this calculation.
 
-V1 accepts starts today or in the past; future scheduling is deferred so no
-additional scheduled lifecycle status is invented. Dates must be real calendar
-dates between year 0001 and 9999. The derived end date must also fit that range.
+Ordinary creation accepts starts today or in the past. Renewal also supports future
+starts, including early renewal at the predecessor's endDate. Dates must be real
+calendar dates between year 0001 and 9999. The derived end must fit that range.
+No additional status is introduced: active means non-cancelled and unexpired,
+including a future renewal. `isCurrentlyActive` is true only within the actual
+period. Clients must not infer current membership eligibility from status alone.
+The active list filter includes future renewals, consistently with their DTO status.
 
 Stored status is active/expired at creation and cancelled on cancellation.
 Read responses calculate effective expiration from endDate and the current UTC
@@ -85,6 +91,7 @@ index verification and unrelated indexes.
 | POST | /api/v1/gyms/:gymId/subscriptions | Create | Denied | Denied |
 | GET | /api/v1/gyms/:gymId/subscriptions | Gym list | Assigned members only | Denied |
 | GET | /api/v1/gyms/:gymId/subscriptions/:subscriptionId | Read | Assigned member only | Denied |
+| POST | /api/v1/gyms/:gymId/subscriptions/:subscriptionId/renew | Renew | Denied | Denied |
 | PATCH | /api/v1/gyms/:gymId/subscriptions/:subscriptionId/cancel | Cancel | Denied | Denied |
 
 Create accepts only:
@@ -128,8 +135,8 @@ Joins and filters apply before pagination and counting, including trainer scope.
 
 Validation is 400; missing authentication 401; access/role/inactive creation
 reference denial 403; missing resources 404; overlapping periods 409. Unexpected
-database failures produce sanitized 500 responses. Invalid raw future/unknown
-lifecycle state fails safely rather than masquerading as an active subscription.
+database failures produce sanitized 500 responses. Unknown lifecycle states fail
+safely; future periods report isCurrentlyActive=false.
 
 Transactions protect overlap against all application creation paths, across API
 processes. Raw writes bypass the service and are not supported provisioning.
@@ -139,7 +146,76 @@ Concurrent cancellation can conservatively cause an overlap rejection requiring
 a retry. Joined offset pagination can be expensive at scale and is not a durable
 snapshot across separate page requests.
 
-Future work includes scheduling policy, member self-read, payments, refunds,
-renewals and billing workflows. Subscription creation is not payment verification.
+Future work includes general scheduling, member self-read, refunds and billing
+workflows. Subscription creation or renewal is not payment verification.
 Test infrastructure now optionally starts an owned single-node replica set;
 existing suites retain standalone mode. No real .env or external database is used.
+
+## Renewal contract and history
+
+`POST /api/v1/gyms/:gymId/subscriptions/:subscriptionId/renew` returns 201 using
+existing success/error envelopes. Admin only; trainer/member denied. Accepts an
+empty object, no body, or only:
+
+```json
+{
+  "startDate": "2026-11-06",
+  "notes": "Renewed monthly membership"
+}
+```
+
+The authenticated, authorized URL gym selects scope. The predecessor URL ID
+selects the member and plan; clients cannot replace those IDs, predecessor ID,
+snapshots, endDate, status, roles or timestamps. Both IDs undergo strict ObjectId
+validation; dates/notes are strict Zod inputs, and notes are trimmed 1–2000 chars.
+
+Renewal creates a **new** MemberSubscription, never extends or replaces the old
+one. It requires an active member, an existing active plan in the same gym and
+a non-cancelled predecessor. It uses the **current** original plan's name,
+duration and price: a plan repriced from 150000 to 180000 paise produces a new
+180000-paise subscription while the original remains 150000. No fallback plan
+is selected. Inactive plans produce 403; missing plans/members produce 404.
+
+Default startDate is the predecessor's exclusive endDate. Custom starts must be
+at or after that date; an explicitly later date permits an intentional gap.
+Every non-cancelled period is checked, including future renewals and expired
+history. Adjacent ranges are valid; overlap produces 409 SUBSCRIPTION_OVERLAP.
+Early renewal does not require expiry. Old records expire naturally in responses;
+renewal never cancels or modifies their business fields, snapshots or timestamps.
+
+One direct successor per predecessor is enforced inside the transaction, even
+if that successor is later cancelled. Repeating renewal returns 409
+SUBSCRIPTION_ALREADY_RENEWED. Renew the latest non-cancelled subscription to
+continue A → B → C. Cancellation releases its date interval for ordinary creation
+but does not erase the chain; a cancelled subscription cannot itself be renewed
+(409 SUBSCRIPTION_CANCELLED). Replacement of a cancelled future successor is a
+separate future workflow, not silently added here.
+
+Within one snapshot/majority transaction, renewal reads the gym-scoped predecessor,
+increments the member version to serialize with all other subscription creates,
+and increments the predecessor version to conflict with cancellation and existing
+payment writes. MongoDB retries write conflicts with a new snapshot: a winning
+cancellation denies renewal; a winning renewal precedes a later cancellation.
+These internal __v coordination changes are the **only** changes to old records;
+business fields and updatedAt remain untouched. Failures roll back counters and
+insertion. Transactions are mandatory; standalone storage fails closed with 503.
+
+The successor's immutable previousSubscriptionId is derived from the predecessor,
+never accepted from a client. Creation of a new ID pointing backward and increasing
+period boundaries prevents cycles through supported APIs. Read joins also require
+a same-gym, same-member predecessor ending at or before the successor starts.
+DTOs expose only the immediate predecessor ID (null for root/older records),
+without recursive history or nested records. Existing bounded list filters remain;
+no additional history endpoint or filter is introduced. A nonunique gymId +
+previousSubscriptionId index supports successor checks; existing range indexes
+remain. Startup adds the index through existing createIndexes without data migration.
+
+Renewal creates **no Payment**, changes no old payments, and adds no payment fields
+or collection. Existing payment recording remains an independent operation using
+the selected subscription's own immutable price snapshot.
+
+Authorization is rechecked against persisted access and gym status before service
+execution. Snapshot reference checks observe transaction-time state; concurrent
+administrative plan/access changes are not locked for the full request. Raw database
+writes bypass service invariants and remain unsupported. No recursive chain repair,
+renew-with-different-plan, automatic collection, refunds, deletion or cron job is added.
