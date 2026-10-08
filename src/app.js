@@ -12,6 +12,9 @@ const { getAttendanceModel } = require('./modules/attendance/attendance.model');
 const { createAttendanceService } = require('./modules/attendance/attendance.service');
 const { createAttendanceRouter } = require('./modules/attendance/attendance.routes');
 const express = require('express');
+const { getMemberActivationModel } = require('./modules/memberAccount/activation.model');
+const { createMemberAccountService } = require('./modules/memberAccount/account.service');
+const { createMemberAccountRouter, createAccountActivationRouter } = require('./modules/memberAccount/account.routes');
 const { getPaymentModel } = require('./modules/payments/payment.model');
 const { createPaymentService } = require('./modules/payments/payment.service');
 const { createPaymentRouter } = require('./modules/payments/payment.routes');
@@ -165,6 +168,12 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       createAuthorizationMiddleware(authorizationService)));
     const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
+    const memberAccountService = createMemberAccountService({ MemberProfile: getMemberProfileModel(database.connection),
+      UserAccount: getUserAccountModel(database.connection), GymAccess: getGymAccessModel(database.connection),
+      Gym: getGymModel(database.connection), MemberActivation: getMemberActivationModel(database.connection), authorizationService, logger });
+    app.use('/api/v1/account', createAccountActivationRouter(memberAccountService));
+    app.use('/api/v1/gyms/:gymId/members/:memberId/account', createMemberAccountRouter(memberAccountService, authService,
+      createAuthorizationMiddleware(authorizationService)));
     app.use('/api/v1/gyms/:gymId/member-onboarding', createMemberOnboardingRouter(memberService, authService,
       createAuthorizationMiddleware(authorizationService)));
     app.use('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,

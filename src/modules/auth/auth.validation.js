@@ -20,4 +20,4 @@ const credential = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const refresh = z.strictObject({ refreshToken: credential.optional() }).default({});
 const provision = z.strictObject({ password });
 const userParams = z.strictObject({ userId: objectId });
-module.exports = { login, refresh, provision, userParams };
+module.exports = { login, refresh, provision, userParams, password };

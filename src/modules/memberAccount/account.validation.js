@@ -1,0 +1,9 @@
+const { z } = require('zod');
+const { createUserAccount } = require('../userAccounts/userAccount.validation');
+const { password } = require('../auth/auth.validation');
+const { objectId } = require('../gyms/gym.validation');
+const provision = createUserAccount.pick({ email: true, displayName: true });
+const activate = z.strictObject({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), password });
+const memberParams = z.strictObject({ gymId: objectId, memberId: objectId });
+const empty = z.strictObject({});
+module.exports = { provision, activate, memberParams, empty };
