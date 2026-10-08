@@ -139,4 +139,4 @@ function createAttendanceService({ Attendance, MemberProfile, Branch, MemberSubs
     },
   };
 }
-module.exports = { createAttendanceService };
+module.exports = { createAttendanceService, attendanceDto: dto };

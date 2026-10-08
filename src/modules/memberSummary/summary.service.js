@@ -4,10 +4,18 @@ const { objectId } = require('../gyms/gym.validation');
 const { calendarDate } = require('../subscriptions/subscription.validation');
 const { MAX_PRICE_PAISE, MAX_DURATION_DAYS } = require('../membershipPlans/plan.validation');
 const { summaryInput } = require('./summary.validation');
+const { attendanceDto: visitDto } = require('../attendance/attendance.service');
 function fail(code = 'INVALID_SUMMARY_STATE') { const error = new Error('Member summary unavailable.'); error.code = code; throw error; }
 function parse(schema, input) { const result = schema.safeParse(input); if (!result.success) fail('VALIDATION_ERROR'); return result.data; }
 function pick(value, fields) { return value ? Object.fromEntries(fields.filter((field) => value[field] !== undefined).map((field) => [field, value[field]])) : undefined; }
 const addressFields = ['line1', 'line2', 'city', 'state', 'postalCode', 'countryCode'];
+function profileDto(member, branch) {
+  return { member: { id: String(member._id), ...pick(member, ['memberCode', 'firstName', 'lastName', 'phone', 'status', 'gender', 'createdAt', 'updatedAt']),
+    branchId: branch ? String(branch._id) : null, dateOfBirth: member.dateOfBirth?.toISOString().slice(0, 10),
+    address: pick(member.address, addressFields), emergencyContact: pick(member.emergencyContact, ['name', 'phone', 'relationship']) },
+  currentBranch: branch ? { id: String(branch._id), name: branch.name, status: branch.status,
+    address: pick(branch.address, addressFields), contact: pick(branch.contact, ['email', 'phone']) } : null };
+}
 function integer(value, maximum = Number.MAX_SAFE_INTEGER) {
   if (!Number.isSafeInteger(value) || value < 0 || value > maximum) fail('INVALID_FINANCIAL_STATE'); return value;
 }
@@ -39,7 +47,7 @@ function attendanceDto(record) {
     checkInAt: record.checkInAt, checkOutAt: record.checkOutAt ?? null, status: record.status };
 }
 function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, TrainerMemberAssignment,
-  MemberSubscription, MembershipPlan, Payment, Attendance, authorizationService }) {
+  MemberSubscription, MembershipPlan, Payment, Attendance, authorizationService, resolveSelfMember }) {
   async function memberFor(auth, authorization, memberId) {
     const id = parse(objectId, memberId);
     authorizationService.requireRoles(auth, authorization, ['admin', 'trainer'], authorization?.gymId);
@@ -83,7 +91,7 @@ function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, Tra
       pipeline: [{ $match: { gymId, $expr: { $and: [{ $eq: ['$_id', '$$subscriptionId'] }, { $eq: ['$memberId', '$$memberId'] }] } } },
         { $project: { _id: 1 } }], as: 'subscription' } };
   }
-  async function payments(filter, current) {
+  async function payments(filter, current, pagination) {
     const total = [{ $group: { _id: null, amount: { $sum: { $convert: { input: '$amountPaise', to: 'decimal', onError: 0, onNull: 0 } } }, count: { $sum: 1 } } }];
     const [result] = await Payment.aggregate([{ $match: { ...filter, status: 'succeeded' } }, subscriptionReference(filter.gymId),
       { $set: { validAmount: { $cond: [{ $isNumber: '$amountPaise' }, { $and: [{ $gt: ['$amountPaise', 0] },
@@ -92,16 +100,17 @@ function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, Tra
         invalid: [{ $match: { $or: [{ validAmount: false }, { 'subscription.0': { $exists: false } }] } }, { $count: 'total' }],
         total, latest: [{ $sort: { paidAt: -1, _id: -1 } }, { $limit: 1 }],
         current: [{ $match: { subscriptionId: current ? new Types.ObjectId(current.id) : null } }, ...total],
+        ...(pagination ? { items: [{ $sort: { paidAt: -1, _id: -1 } }, { $skip: (pagination.page - 1) * pagination.limit }, { $limit: pagination.limit }] } : {}),
       } }]);
     if (result.invalid.length) fail('INVALID_FINANCIAL_STATE');
     const collected = result.total[0]; const paid = result.current[0];
     const paidAmountPaise = exactTotal(paid?.amount);
     if (current && paidAmountPaise > current.pricePaiseSnapshot) fail('INVALID_FINANCIAL_STATE');
-    return { summary: { totalSuccessfulAmountPaise: exactTotal(collected?.amount), successfulPaymentCount: integer(collected?.count ?? 0),
+    return { ...(pagination ? { items: result.items.map(paymentDto) } : {}), summary: { totalSuccessfulAmountPaise: exactTotal(collected?.amount), successfulPaymentCount: integer(collected?.count ?? 0),
       latestSuccessfulPayment: paymentDto(result.latest[0]) }, current: current ? { pricePaise: current.pricePaiseSnapshot,
       paidAmountPaise, remainingAmountPaise: current.pricePaiseSnapshot - paidAmountPaise, paymentCount: integer(paid?.count ?? 0) } : null };
   }
-  async function attendance(filter) {
+  async function attendance(filter, pagination) {
     const [result] = await Attendance.aggregate([{ $match: filter }, subscriptionReference(filter.gymId),
       { $lookup: { from: Branch.collection.name, localField: 'branchId', foreignField: '_id',
         pipeline: [{ $match: { gymId: filter.gymId } }, { $project: { _id: 1 } }], as: 'branch' } },
@@ -111,22 +120,58 @@ function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, Tra
         completed: [{ $match: { status: 'completed' } }, { $count: 'total' }],
         latest: [{ $sort: { checkInAt: -1, _id: -1 } }, { $limit: 1 }],
         open: [{ $match: { status: 'open' } }, { $limit: 2 }],
+        ...(pagination ? { items: [{ $sort: { checkInAt: -1, _id: -1 } }, { $skip: (pagination.page - 1) * pagination.limit }, { $limit: pagination.limit }], count: [{ $count: 'total' }] } : {}),
       } }]);
     if (result.invalid.length || result.open.length > 1) fail();
-    return { totalCompletedVisits: result.completed[0]?.total ?? 0, latestAttendance: attendanceDto(result.latest[0]),
+    return { ...(pagination ? { items: result.items.map((record) => pick(visitDto(record), ['id', 'branchId', 'checkInAt', 'checkOutAt', 'status', 'durationMs'])),
+      total: result.count[0]?.total ?? 0 } : {}), totalCompletedVisits: result.completed[0]?.total ?? 0, latestAttendance: attendanceDto(result.latest[0]),
       currentlyCheckedIn: result.open.length === 1, currentAttendance: attendanceDto(result.open[0]) };
   }
-  async function trainers(filter) {
+  async function trainers(filter, pagination) {
     const records = await TrainerMemberAssignment.aggregate([{ $match: { ...filter, status: 'active' } },
       { $lookup: { from: TrainerProfile.collection.name, localField: 'trainerId', foreignField: '_id',
         pipeline: [{ $match: { gymId: filter.gymId, status: 'active' } },
-          { $project: { trainerCode: 1, firstName: 1, lastName: 1, phone: 1, specializations: 1 } }], as: 'trainer' } },
-      { $unwind: '$trainer' }, { $sort: { assignedAt: -1, _id: -1 } }, { $limit: 101 }]);
+          { $project: { trainerCode: 1, firstName: 1, lastName: 1, phone: 1, specializations: 1, ...(pagination ? { branchId: 1 } : {}) } }], as: 'trainer' } },
+      { $unwind: '$trainer' }, ...(pagination ? [{ $facet: {
+        records: [{ $sort: { assignedAt: -1, _id: -1 } }, { $skip: (pagination.page - 1) * pagination.limit }, { $limit: pagination.limit },
+          { $lookup: { from: Branch.collection.name, localField: 'trainer.branchId', foreignField: '_id',
+            pipeline: [{ $match: { gymId: filter.gymId } }, { $project: { _id: 1 } }], as: 'branch' } }], count: [{ $count: 'total' }],
+      } }] : [{ $sort: { assignedAt: -1, _id: -1 } }, { $limit: 101 }])]);
+    if (pagination) return { data: records[0].records.map(({ _id, trainer, assignedAt, branch }) => ({ trainerId: String(trainer._id),
+      ...pick(trainer, ['trainerCode', 'firstName', 'lastName', 'phone', 'specializations']),
+      ...(branch.length ? { branchId: String(branch[0]._id) } : {}), assignmentId: String(_id), assignedAt })),
+    pagination: { ...pagination, total: records[0].count[0]?.total ?? 0 } };
     if (records.length > 100) fail();
     return records.map(({ trainer, assignedAt }) => ({ trainerId: String(trainer._id),
       ...pick(trainer, ['trainerCode', 'firstName', 'lastName', 'phone', 'specializations']), assignedAt }));
   }
   return {
+    async selfRead(auth, authorization, kind, query) {
+      if (!['profile', 'membership', 'payments', 'attendance', 'trainers'].includes(kind)) fail('VALIDATION_ERROR');
+      const pagination = kind === 'profile' ? null : parse(summaryInput, query);
+      if (typeof resolveSelfMember !== 'function') fail('FORBIDDEN');
+      const member = await resolveSelfMember(auth, authorization);
+      const gymId = new Types.ObjectId(member.gymId); const filter = { gymId, memberId: member._id };
+      if (kind === 'profile') {
+        const branch = member.branchId ? await Branch.findOne({ _id: member.branchId, gymId }).select('name status address contact').lean() : null;
+        return { data: profileDto(member, branch) };
+      }
+      if (kind === 'membership') {
+        const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+        const result = await subscriptions(filter, today, pagination.page, pagination.limit);
+        return { data: { currentMembership: result.current, subscriptions: result.history.items }, pagination: { ...pagination, total: result.history.total } };
+      }
+      if (kind === 'payments') {
+        const result = await payments(filter, null, pagination);
+        return { data: { payments: result.items, totalSuccessfulPaidPaise: result.summary.totalSuccessfulAmountPaise },
+          pagination: { ...pagination, total: result.summary.successfulPaymentCount } };
+      }
+      if (kind === 'attendance') {
+        const result = await attendance(filter, pagination);
+        return { data: result.items, pagination: { ...pagination, total: result.total } };
+      }
+      return trainers(filter, pagination);
+    },
     async membershipHistory(auth, authorization, memberId, { page, limit, status, from, to }) {
       if (!Number.isInteger(page) || page < 1 || page > 10000 || !Number.isInteger(limit) || limit < 1 || limit > 100
         || (status && !['active', 'expired', 'cancelled'].includes(status))
@@ -154,11 +199,7 @@ function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, Tra
         member.branchId ? Branch.findOne({ _id: member.branchId, gymId }).select('name status address contact').lean() : null,
       ]);
       const money = await payments(filter, subs.current);
-      return { member: { id: String(member._id), ...pick(member, ['memberCode', 'firstName', 'lastName', 'phone', 'status', 'gender', 'createdAt', 'updatedAt']),
-        branchId: branch ? String(branch._id) : null, dateOfBirth: member.dateOfBirth?.toISOString().slice(0, 10),
-        address: pick(member.address, addressFields), emergencyContact: pick(member.emergencyContact, ['name', 'phone', 'relationship']) },
-      currentBranch: branch ? { id: String(branch._id), name: branch.name, status: branch.status,
-        address: pick(branch.address, addressFields), contact: pick(branch.contact, ['email', 'phone']) } : null,
+      return { ...profileDto(member, branch),
       currentTrainers, currentSubscription: subs.current, subscriptionHistory: subs.history,
       paymentSummary: money.summary, currentSubscriptionPaymentSummary: money.current, attendanceSummary: visits };
     },

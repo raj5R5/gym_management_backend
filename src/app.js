@@ -12,6 +12,9 @@ const { getAttendanceModel } = require('./modules/attendance/attendance.model');
 const { createAttendanceService } = require('./modules/attendance/attendance.service');
 const { createAttendanceRouter } = require('./modules/attendance/attendance.routes');
 const express = require('express');
+const { createSelfMemberResolver } = require('./modules/memberSelfService/self.authorization');
+const { createMemberSelfService } = require('./modules/memberSelfService/self.service');
+const { createMemberSelfRouter } = require('./modules/memberSelfService/self.routes');
 const { getMemberActivationModel } = require('./modules/memberAccount/activation.model');
 const { createMemberAccountService } = require('./modules/memberAccount/account.service');
 const { createMemberAccountRouter, createAccountActivationRouter } = require('./modules/memberAccount/account.routes');
@@ -163,7 +166,10 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       Branch: getBranchModel(database.connection), TrainerProfile: getTrainerProfileModel(database.connection),
       TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection), MemberSubscription: getMemberSubscriptionModel(database.connection),
       MembershipPlan: getMembershipPlanModel(database.connection), Payment: getPaymentModel(database.connection),
-      Attendance: getAttendanceModel(database.connection), authorizationService });
+      Attendance: getAttendanceModel(database.connection), authorizationService,
+      resolveSelfMember: createSelfMemberResolver({ MemberProfile: getMemberProfileModel(database.connection), authorizationService }) });
+    app.use('/api/v1/me/gyms/:gymId', createMemberSelfRouter(createMemberSelfService({ summaryService }), authService,
+      createAuthorizationMiddleware(authorizationService)));
     app.use('/api/v1/gyms/:gymId/members', createMemberSummaryRouter(summaryService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
