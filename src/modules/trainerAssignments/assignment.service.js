@@ -1,6 +1,6 @@
 const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
-const { createAssignment, updateAssignment, assignmentListInput } = require('./assignment.validation');
+const { createAssignment, updateAssignment, assignmentListInput, scopedInput } = require('./assignment.validation');
 function fail(code) { const error = new Error('Assignment operation failed.'); error.code = code; throw error; }
 function parse(schema, value) {
   const result = schema.safeParse(value);
@@ -12,7 +12,7 @@ function dto(record) {
     memberId: String(record.memberId), status: record.status, assignedAt: record.assignedAt,
     endedAt: record.endedAt, createdAt: record.createdAt, updatedAt: record.updatedAt };
 }
-function createAssignmentService({ TrainerMemberAssignment, TrainerProfile, MemberProfile, authorizationService }) {
+function createAssignmentService({ TrainerMemberAssignment, TrainerProfile, MemberProfile, Branch, authorizationService }) {
   async function scope(auth, authorization, allowed) {
     authorizationService.requireRoles(auth, authorization, allowed, authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
@@ -45,7 +45,40 @@ function createAssignmentService({ TrainerMemberAssignment, TrainerProfile, Memb
     await profiles(filter.gymId, record.trainerId, record.memberId);
     return record;
   }
+  async function view(auth, authorization, id, query, direction) {
+    const selected = await readScope(auth, authorization); const profileId = parse(objectId, id);
+    const { page, limit, status } = parse(scopedInput, query);
+    if (selected.trainerId && status !== 'active') fail('FORBIDDEN');
+    if (direction === 'trainer' && selected.trainerId && selected.trainerId !== profileId.toLowerCase()) fail('FORBIDDEN');
+    const model = direction === 'trainer' ? TrainerProfile : MemberProfile;
+    if (!await model.exists({ _id: profileId, gymId: selected.gymId })) fail(direction === 'trainer' ? 'TRAINER_NOT_FOUND' : 'MEMBER_NOT_FOUND');
+    if (direction === 'member' && selected.trainerId && !await TrainerMemberAssignment.exists({ gymId: selected.gymId,
+      trainerId: selected.trainerId, memberId: profileId, status: 'active' })) fail('MEMBER_NOT_FOUND');
+    const gymId = new Types.ObjectId(selected.gymId);
+    const filter = { gymId, status, [direction === 'trainer' ? 'trainerId' : 'memberId']: new Types.ObjectId(profileId),
+      ...(selected.trainerId ? { trainerId: new Types.ObjectId(selected.trainerId) } : {}) };
+    const result = await TrainerMemberAssignment.aggregate([{ $match: filter },
+      ...[[TrainerProfile, 'trainerId', 'trainer'], [MemberProfile, 'memberId', 'member']].flatMap(([profileModel, field, alias]) => [
+        { $lookup: { from: profileModel.collection.name, localField: field, foreignField: '_id', pipeline: [
+          { $match: { gymId } }, { $project: { _id: 1, trainerCode: 1, memberCode: 1, firstName: 1, lastName: 1, phone: 1, status: 1, branchId: 1 } },
+        ], as: alias } }, { $unwind: `$${alias}` },
+      ]),
+      { $facet: { records: [{ $sort: { createdAt: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit },
+        { $lookup: { from: Branch.collection.name, localField: direction === 'trainer' ? 'member.branchId' : 'trainer.branchId',
+          foreignField: '_id', pipeline: [{ $match: { gymId } }, { $project: { _id: 1 } }], as: 'branch' } }], count: [{ $count: 'total' }] } },
+    ]);
+    return { data: result[0].records.map((record) => {
+      const profile = direction === 'trainer' ? record.member : record.trainer;
+      return { [direction === 'trainer' ? 'memberId' : 'trainerId']: String(profile._id),
+        [direction === 'trainer' ? 'memberCode' : 'trainerCode']: direction === 'trainer' ? profile.memberCode : profile.trainerCode,
+        firstName: profile.firstName, lastName: profile.lastName, phone: profile.phone, status: profile.status,
+        ...(record.branch.length ? { branchId: String(record.branch[0]._id) } : {}), assignmentId: String(record._id),
+        assignedAt: record.assignedAt, assignmentStatus: record.status, endedAt: record.endedAt };
+    }), pagination: { page, limit, total: result[0].count[0]?.total ?? 0 } };
+  }
   return {
+    async trainerMembers(auth, authorization, trainerId, query) { return view(auth, authorization, trainerId, query, 'trainer'); },
+    async memberTrainers(auth, authorization, memberId, query) { return view(auth, authorization, memberId, query, 'member'); },
     // Route guard ensures trainer ownership denials occur before the controller.
     async authorizeRead(auth, authorization, assignmentId) {
       const filter = await readScope(auth, authorization);

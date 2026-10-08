@@ -1,5 +1,8 @@
 # Trainer ↔ Member Assignment — Milestone 11
 
+Milestone 24 scoped operational views and the explicit deactivation endpoint are
+documented in [trainer-member-assignment.md](trainer-member-assignment.md).
+
 TrainerMemberAssignment is a relationship period between a TrainerProfile and a
 MemberProfile in one gym. Profiles remain separate from accounts and from each
 other. Creating an assignment never creates or changes profiles, accounts,

@@ -22,6 +22,18 @@ function createAssignmentRouter(service, authService, authorization) {
     validate({ params: schemas.assignmentParams }), readGuard, controller.get);
   router.patch('/:assignmentId', authorization.requireRoles('admin'),
     validate({ params: schemas.assignmentParams, body: schemas.updateAssignment }), controller.update);
+  router.patch('/:assignmentId/deactivate', authorization.requireRoles('admin'),
+    validate({ params: schemas.assignmentParams, body: schemas.empty.default({}), query: schemas.empty }), controller.deactivate);
   return router;
 }
-module.exports = { createAssignmentRouter };
+function createAssignmentViewsRouter(service, authService, authorization) {
+  const router = Router({ mergeParams: true }); const controller = createAssignmentController(service);
+  const guards = [authorization.requireGymAccess,
+    authorization.requireRoles('admin', 'trainer'), (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }];
+  router.get('/trainers/:trainerId/members', authenticate(authService),
+    validate({ params: schemas.trainerParams, query: schemas.scopedQuery }), ...guards, controller.trainerMembers);
+  router.get('/members/:memberId/trainers', authenticate(authService),
+    validate({ params: schemas.memberParams, query: schemas.scopedQuery }), ...guards, controller.memberTrainers);
+  return router;
+}
+module.exports = { createAssignmentRouter, createAssignmentViewsRouter };

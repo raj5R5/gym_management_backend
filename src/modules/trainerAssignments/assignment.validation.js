@@ -14,4 +14,10 @@ const assignmentListQuery = listQuery.extend({
 const assignmentListInput = assignmentListQuery.extend({
   page: z.number().int().min(1).max(10000), limit: z.number().int().min(1).max(100),
 });
-module.exports = { statuses, createAssignment, updateAssignment, assignmentParams, assignmentListQuery, assignmentListInput };
+const scopedQuery = listQuery.extend({ status: z.enum(statuses).default('active') });
+const scopedInput = scopedQuery.extend({ page: z.number().int().min(1).max(10000), limit: z.number().int().min(1).max(100) });
+const trainerParams = z.strictObject({ gymId: objectId, trainerId: objectId });
+const memberParams = z.strictObject({ gymId: objectId, memberId: objectId });
+const empty = z.strictObject({});
+module.exports = { statuses, createAssignment, updateAssignment, assignmentParams, assignmentListQuery, assignmentListInput,
+  scopedQuery, scopedInput, trainerParams, memberParams, empty };
