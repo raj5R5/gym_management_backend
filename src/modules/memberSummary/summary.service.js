@@ -1,3 +1,4 @@
+const { exactTotal } = require('../payments/payment.service');
 const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
 const { calendarDate } = require('../subscriptions/subscription.validation');
@@ -9,12 +10,6 @@ function pick(value, fields) { return value ? Object.fromEntries(fields.filter((
 const addressFields = ['line1', 'line2', 'city', 'state', 'postalCode', 'countryCode'];
 function integer(value, maximum = Number.MAX_SAFE_INTEGER) {
   if (!Number.isSafeInteger(value) || value < 0 || value > maximum) fail('INVALID_FINANCIAL_STATE'); return value;
-}
-function exactTotal(value) {
-  let amount;
-  try { amount = BigInt(value?.toString() ?? '0'); } catch { fail('INVALID_FINANCIAL_STATE'); }
-  if (amount < 0n || amount > BigInt(Number.MAX_SAFE_INTEGER)) fail('INVALID_FINANCIAL_STATE');
-  return Number(amount);
 }
 function subscriptionDto(record, today) {
   if (!['active', 'expired', 'cancelled'].includes(record.status) || !(record.startDate instanceof Date)
@@ -68,14 +63,14 @@ function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, Tra
           { $lte: ['$endDate', '$$startDate'] }] } } }, { $project: { _id: 1 } }], as: 'previous' } },
     ];
   }
-  async function subscriptions(filter, today, page, limit) {
+  async function subscriptions(filter, today, page, limit, historyFilter = {}) {
     const [result] = await MemberSubscription.aggregate([{ $match: filter }, ...subscriptionLinks(filter.gymId),
       { $facet: {
         invalid: [{ $match: { $or: [{ 'plan.0': { $exists: false } }, { status: { $nin: ['active', 'expired', 'cancelled'] } },
           { previousSubscriptionId: { $ne: null }, 'previous.0': { $exists: false } }] } }, { $count: 'total' }],
         current: [{ $match: { status: { $ne: 'cancelled' }, startDate: { $lte: today }, endDate: { $gt: today } } }, { $limit: 2 }],
-        items: [{ $sort: { startDate: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit }],
-        count: [{ $count: 'total' }],
+        items: [{ $match: historyFilter }, { $sort: { startDate: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit }],
+        count: [{ $match: historyFilter }, { $count: 'total' }],
       } }]);
     if (result.invalid.length || result.current.length > 1) fail();
     const current = result.current[0] ? subscriptionDto(result.current[0], today) : null;
@@ -132,6 +127,22 @@ function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, Tra
       ...pick(trainer, ['trainerCode', 'firstName', 'lastName', 'phone', 'specializations']), assignedAt }));
   }
   return {
+    async membershipHistory(auth, authorization, memberId, { page, limit, status, from, to }) {
+      if (!Number.isInteger(page) || page < 1 || page > 10000 || !Number.isInteger(limit) || limit < 1 || limit > 100
+        || (status && !['active', 'expired', 'cancelled'].includes(status))
+        || (from && !calendarDate.safeParse(from).success) || (to && !calendarDate.safeParse(to).success)
+        || (from && to && from > to)) fail('VALIDATION_ERROR');
+      const { member, gymId } = await memberFor(auth, authorization, memberId);
+      const date = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+      const filter = {};
+      if (status === 'cancelled') filter.status = 'cancelled';
+      else if (status) { filter.status = { $ne: 'cancelled' }; filter.endDate = status === 'expired' ? { $lte: date } : { $gt: date }; }
+      if (from || to) filter.startDate = { ...(from ? { $gte: new Date(`${from}T00:00:00Z`) } : {}), ...(to ? { $lte: new Date(`${to}T00:00:00Z`) } : {}) };
+      const subs = await subscriptions({ gymId, memberId: member._id }, date, page, limit, filter);
+      return { member: { id: String(member._id), ...pick(member, ['memberCode', 'firstName', 'lastName']) },
+        currentMembership: subs.current, subscriptions: subs.history.items,
+        pagination: { page, limit, total: subs.history.total } };
+    },
     async authorizeRead(auth, authorization, memberId) { await memberFor(auth, authorization, memberId); },
     async get(auth, authorization, memberId, query) {
       const { page, limit } = parse(summaryInput, query); const { member, gymId } = await memberFor(auth, authorization, memberId);

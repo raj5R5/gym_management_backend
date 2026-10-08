@@ -92,6 +92,13 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
       status: endDate <= midnight() ? 'expired' : 'active', notes: data.notes }], { session });
     return dto(record.toObject());
   }
+  async function cancelRecord(selected, subscriptionId, data) {
+    const record = await MemberSubscription.findOneAndUpdate({ _id: subscriptionId, gymId: selected.gymId, ...(selected.memberId ? { memberId: selected.memberId } : {}), status: { $ne: 'cancelled' } },
+      { $set: { status: 'cancelled', cancelledAt: new Date(), ...data } }, { returnDocument: 'after', runValidators: true }).lean();
+    const result = record || await existing(selected, subscriptionId);
+    if (selected.memberId && String(result.memberId) !== selected.memberId) fail('SUBSCRIPTION_NOT_FOUND');
+    return dto(result);
+  }
   return {
     async authorizeRead(auth, authorization, subscriptionId) {
       const selected = await readScope(auth, authorization);
@@ -155,12 +162,18 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
         { $facet: { records: [{ $sort: { createdAt: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit }], count: [{ $count: 'total' }] } }]);
       return { data: result.records.map((record) => dto(record, now)), pagination: { page, limit, total: result.count[0]?.total ?? 0 } };
     },
+    async cancelForMember(auth, authorization, memberId, subscriptionId, input) {
+      const selected = await readScope(auth, authorization); const member = parse(objectId, memberId); const data = parse(cancelSubscription, input);
+      if (selected.trainerId && !await TrainerMemberAssignment.exists({ gymId: selected.gymId, trainerId: selected.trainerId, memberId: member, status: 'active' })) fail('MEMBER_NOT_FOUND');
+      if (!await MemberProfile.exists({ _id: member, gymId: selected.gymId })) fail('MEMBER_NOT_FOUND');
+      const record = await existing(selected, subscriptionId);
+      if (String(record.memberId) !== member.toLowerCase()) fail('SUBSCRIPTION_NOT_FOUND');
+      return cancelRecord({ ...selected, memberId: member.toLowerCase() }, subscriptionId, data);
+    },
     async cancel(auth, authorization, subscriptionId, input) {
       const selected = await scope(auth, authorization, ['admin']); const data = parse(cancelSubscription, input);
       await existing(selected, subscriptionId);
-      const record = await MemberSubscription.findOneAndUpdate({ _id: subscriptionId, gymId: selected.gymId, status: { $ne: 'cancelled' } },
-        { $set: { status: 'cancelled', cancelledAt: new Date(), ...data } }, { returnDocument: 'after', runValidators: true }).lean();
-      return dto(record || await existing(selected, subscriptionId));
+      return cancelRecord(selected, subscriptionId, data);
     },
   };
 }

@@ -8,6 +8,12 @@ function money(value) {
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_PRICE_PAISE) fail('INVALID_FINANCIAL_STATE');
   return BigInt(value);
 }
+function exactTotal(value) {
+  let amount;
+  try { amount = BigInt(value?.toString() ?? '0'); } catch { fail('INVALID_FINANCIAL_STATE'); }
+  if (amount < 0n || amount > BigInt(Number.MAX_SAFE_INTEGER)) fail('INVALID_FINANCIAL_STATE');
+  return Number(amount);
+}
 function dto(record) {
   return { id: String(record._id), gymId: String(record.gymId), memberId: String(record.memberId),
     subscriptionId: String(record.subscriptionId), amountPaise: record.amountPaise, status: record.status,
@@ -75,6 +81,30 @@ function createPaymentService({ Payment, MemberSubscription, MemberProfile, Trai
     return dto(record.toObject());
   }
   return {
+    async summariesForMemberships(auth, authorization, memberId, subscriptions) {
+      const selected = await readScope(auth, authorization); const id = parse(objectId, memberId);
+      if (!Array.isArray(subscriptions) || subscriptions.length > 101) fail('VALIDATION_ERROR');
+      if (selected.trainerId && !await TrainerMemberAssignment.exists({ gymId: selected.gymId, trainerId: selected.trainerId, memberId: id, status: 'active' })) fail('MEMBER_NOT_FOUND');
+      if (!await MemberProfile.exists({ _id: id, gymId: selected.gymId })) fail('MEMBER_NOT_FOUND');
+      const ids = [...new Set(subscriptions.map((record) => parse(objectId, record.id)))];
+      if (!ids.length) return {};
+      const records = await MemberSubscription.find({ gymId: selected.gymId, memberId: id, _id: { $in: ids } }).select('_id pricePaiseSnapshot').lean();
+      if (records.length !== ids.length) fail('SUBSCRIPTION_NOT_FOUND');
+      const totals = await Payment.aggregate([{ $match: { gymId: new Types.ObjectId(selected.gymId),
+        subscriptionId: { $in: ids.map((value) => new Types.ObjectId(value)) }, status: 'succeeded' } },
+        { $set: { valid: { $cond: [{ $isNumber: '$amountPaise' }, { $and: [{ $gt: ['$amountPaise', 0] },
+          { $lte: ['$amountPaise', MAX_PRICE_PAISE] }, { $eq: ['$amountPaise', { $trunc: '$amountPaise' }] },
+          { $eq: ['$memberId', new Types.ObjectId(id)] }] }, false] } } },
+        { $group: { _id: '$subscriptionId', amount: { $sum: { $convert: { input: '$amountPaise', to: 'decimal', onError: 0, onNull: 0 } } },
+          invalid: { $sum: { $cond: ['$valid', 0, 1] } } } }]);
+      if (totals.some((record) => record.invalid)) fail('INVALID_FINANCIAL_STATE');
+      const amounts = new Map(totals.map((record) => [String(record._id), BigInt(exactTotal(record.amount))]));
+      return Object.fromEntries(records.map((record) => {
+        const price = money(record.pricePaiseSnapshot); const paid = amounts.get(String(record._id)) ?? 0n;
+        if (paid > price) fail('INVALID_FINANCIAL_STATE');
+        return [String(record._id), { totalSuccessfulPaidPaise: Number(paid), remainingBalancePaise: Number(price - paid) }];
+      }));
+    },
     async authorizeRead(auth, authorization, paymentId) {
       const selected = await readScope(auth, authorization); if (paymentId !== undefined) await existing(selected, paymentId);
     },
@@ -112,4 +142,4 @@ function createPaymentService({ Payment, MemberSubscription, MemberProfile, Trai
     },
   };
 }
-module.exports = { createPaymentService };
+module.exports = { createPaymentService, exactTotal };
