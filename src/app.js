@@ -1,3 +1,5 @@
+const { createMemberMembershipService } = require('./modules/memberMembership/membership.service');
+const { createMemberMembershipRouter } = require('./modules/memberMembership/membership.routes');
 const { createStaffService } = require('./modules/staff/staff.service');
 const { createStaffRouter } = require('./modules/staff/staff.routes');
 const { createDashboardService } = require('./modules/gymDashboard/dashboard.service');
@@ -190,6 +192,10 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
       authorizationService });
     app.use('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    const memberMembershipService = createMemberMembershipService({ MemberSubscription: getMemberSubscriptionModel(database.connection),
+      subscriptionService, paymentService, authorizationService });
+    app.use('/api/v1/gyms/:gymId/member-memberships', createMemberMembershipRouter(memberMembershipService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const attendanceService = createAttendanceService({ Gym: getGymModel(database.connection), Attendance: getAttendanceModel(database.connection),
       MemberProfile: getMemberProfileModel(database.connection), Branch: getBranchModel(database.connection),

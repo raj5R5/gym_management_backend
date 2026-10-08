@@ -105,6 +105,14 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
         return insertPeriod(gymId, data, session);
       });
     },
+    async createForPurchase(auth, authorization, input, session) {
+      if (!session?.inTransaction() || session.client !== MemberSubscription.db.getClient()) fail('INVALID_TRANSACTION_CONTEXT');
+      const selected = await readScope(auth, authorization); const data = parse(createSubscription, input);
+      if (selected.trainerId && !await TrainerMemberAssignment.exists({ gymId: selected.gymId,
+        trainerId: selected.trainerId, memberId: data.memberId, status: 'active' }).session(session)) fail('MEMBER_NOT_FOUND');
+      await lockMember(selected.gymId, data.memberId, session);
+      return insertPeriod(selected.gymId, data, session);
+    },
     async renew(auth, authorization, subscriptionId, input) {
       const { gymId } = await scope(auth, authorization, ['admin']);
       const id = parse(objectId, subscriptionId); const data = parse(renewSubscription, input);
