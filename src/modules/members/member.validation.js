@@ -23,8 +23,9 @@ const mutable = {
   emergencyContact: emergencyContact.nullable().optional(), status: z.enum(statuses),
 };
 const createMember = z.strictObject({ ...mutable, memberCode, status: z.enum(statuses).default('active') });
+const onboardMember = createMember.omit({ status: true }).extend({ branchId: objectId.optional() });
 const updateMember = z.strictObject(mutable).partial()
   .refine((value) => Object.keys(value).length > 0, 'Update cannot be empty');
 const memberParams = z.strictObject({ gymId: objectId, memberId: objectId });
 const memberListQuery = listQuery.extend({ status: z.enum(statuses).optional(), search: text(100).optional() });
-module.exports = { createMember, updateMember, memberParams, memberListQuery, statuses, genders };
+module.exports = { createMember, onboardMember, updateMember, memberParams, memberListQuery, statuses, genders };

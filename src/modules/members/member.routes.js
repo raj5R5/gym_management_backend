@@ -18,4 +18,11 @@ function createMemberRouter(service, authService, authorization) {
     validate({ params: schemas.memberParams, body: schemas.updateMember }), controller.update);
   return router;
 }
-module.exports = { createMemberRouter };
+function createMemberOnboardingRouter(service, authService, authorization) {
+  const router = Router({ mergeParams: true }); const controller = createMemberController(service);
+  router.post('/', authenticate(authService), validate({ params: gymParams }), authorization.requireGymAccess,
+    authorization.requireRoles('admin', 'trainer'), validate({ body: schemas.onboardMember }),
+    (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, controller.onboard);
+  return router;
+}
+module.exports = { createMemberRouter, createMemberOnboardingRouter };

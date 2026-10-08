@@ -25,7 +25,7 @@ const { createTrainerService } = require('./modules/trainers/trainer.service');
 const { createTrainerRouter } = require('./modules/trainers/trainer.routes');
 const { getMemberProfileModel } = require('./modules/members/member.model');
 const { createMemberService } = require('./modules/members/member.service');
-const { createMemberRouter } = require('./modules/members/member.routes');
+const { createMemberRouter, createMemberOnboardingRouter } = require('./modules/members/member.routes');
 const { createAuthorizationService } = require('./modules/authorization/authorization.service');
 const { createAuthorizationMiddleware } = require('./middleware/authorize');
 const cookieParser = require('cookie-parser');
@@ -161,6 +161,8 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       createAuthorizationMiddleware(authorizationService)));
     const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
+    app.use('/api/v1/gyms/:gymId/member-onboarding', createMemberOnboardingRouter(memberService, authService,
+      createAuthorizationMiddleware(authorizationService)));
     app.use('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const trainerService = createTrainerService({ TrainerProfile: getTrainerProfileModel(database.connection),

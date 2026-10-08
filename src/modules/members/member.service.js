@@ -1,5 +1,5 @@
 const { objectId } = require('../gyms/gym.validation');
-const { createMember, updateMember, memberListQuery } = require('./member.validation');
+const { createMember, onboardMember, updateMember, memberListQuery } = require('./member.validation');
 function fail(code) { const error = new Error('Member operation failed.'); error.code = code; throw error; }
 function parse(schema, value) {
   const result = schema.safeParse(value);
@@ -34,7 +34,18 @@ function createMemberService({ MemberProfile, Branch, UserAccount, authorization
     if (!member) fail('MEMBER_NOT_FOUND');
     return member;
   }
+  async function insert(gymId, data, userId) {
+    const record = { ...data, gymId, ...(userId ? { userId } : {}) };
+    for (const key of Object.keys(record)) if (record[key] === null) delete record[key];
+    return memberDto((await MemberProfile.create(record)).toObject());
+  }
   return {
+    async onboard(auth, authorization, input) {
+      const gymId = await scope(auth, authorization, ['admin', 'trainer']);
+      const data = parse(onboardMember, input);
+      await activeBranch(gymId, data.branchId);
+      return insert(gymId, { ...data, status: 'active' });
+    },
     async create(auth, authorization, input, { linkedUserId } = {}) {
       const gymId = await scope(auth, authorization, ['admin']);
       const data = parse(createMember, input);
@@ -42,9 +53,7 @@ function createMemberService({ MemberProfile, Branch, UserAccount, authorization
       // Reserved for trusted server callers; HTTP bodies cannot set this relationship.
       const userId = linkedUserId === undefined ? undefined : parse(objectId, linkedUserId);
       if (userId && !await UserAccount.exists({ _id: userId })) fail('USER_ACCOUNT_NOT_FOUND');
-      const record = { ...data, gymId, ...(userId ? { userId } : {}) };
-      for (const key of Object.keys(record)) if (record[key] === null) delete record[key];
-      return memberDto((await MemberProfile.create(record)).toObject());
+      return insert(gymId, data, userId);
     },
     async get(auth, authorization, memberId) {
       const gymId = await scope(auth, authorization, ['admin', 'trainer']);
