@@ -1,3 +1,6 @@
+const { getMemberOnboardingOperationModel } = require('./modules/memberOnboardingComplete/operation.model');
+const { createCompleteOnboardingService } = require('./modules/memberOnboardingComplete/complete.service');
+const { createCompleteOnboardingRouter } = require('./modules/memberOnboardingComplete/complete.routes');
 const { createMembershipManagementService } = require('./modules/memberMembershipManagement/management.service');
 const { createMembershipManagementRouter } = require('./modules/memberMembershipManagement/management.routes');
 const { createMemberMembershipService } = require('./modules/memberMembership/membership.service');
@@ -96,7 +99,7 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
     },
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
     exposedHeaders: ['X-Request-ID'],
     maxAge: 600,
   }));
@@ -212,6 +215,12 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
       authorizationService });
     app.use('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    const completeOnboardingService = createCompleteOnboardingService({
+      MemberOnboardingOperation: getMemberOnboardingOperationModel(database.connection),
+      Gym: getGymModel(database.connection), GymAccess: getGymAccessModel(database.connection),
+      UserAccount: getUserAccountModel(database.connection), memberService, subscriptionService, paymentService, authorizationService });
+    app.use('/api/v1/gyms/:gymId/member-onboarding', createCompleteOnboardingRouter(completeOnboardingService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const memberMembershipService = createMemberMembershipService({ MemberSubscription: getMemberSubscriptionModel(database.connection),
       subscriptionService, paymentService, authorizationService });

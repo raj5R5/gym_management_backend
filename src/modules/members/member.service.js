@@ -22,9 +22,9 @@ function createMemberService({ MemberProfile, Branch, UserAccount, authorization
     authorizationService.requireRoles(auth, current, allowed, authorization.gymId);
     return current.gymId;
   }
-  async function activeBranch(gymId, branchId) {
+  async function activeBranch(gymId, branchId, session) {
     if (!branchId) return;
-    const branch = await Branch.findOne({ _id: branchId, gymId }).select('status').lean();
+    const branch = await Branch.findOne({ _id: branchId, gymId }).session(session ?? null).select('status').lean();
     if (!branch) fail('BRANCH_NOT_FOUND');
     if (branch.status !== 'active') fail('FORBIDDEN');
   }
@@ -34,12 +34,20 @@ function createMemberService({ MemberProfile, Branch, UserAccount, authorization
     if (!member) fail('MEMBER_NOT_FOUND');
     return member;
   }
-  async function insert(gymId, data, userId) {
+  async function insert(gymId, data, userId, session) {
     const record = { ...data, gymId, ...(userId ? { userId } : {}) };
     for (const key of Object.keys(record)) if (record[key] === null) delete record[key];
-    return memberDto((await MemberProfile.create(record)).toObject());
+    const created = session ? (await MemberProfile.create([record], { session }))[0] : await MemberProfile.create(record);
+    return memberDto(created.toObject());
   }
   return {
+    async onboardForComplete(auth, authorization, input, session) {
+      if (!session?.inTransaction() || session.client !== MemberProfile.db.getClient()) fail('INVALID_TRANSACTION_CONTEXT');
+      const gymId = await scope(auth, authorization, ['admin']);
+      const data = parse(onboardMember, input);
+      await activeBranch(gymId, data.branchId, session);
+      return insert(gymId, { ...data, status: 'active' }, undefined, session);
+    },
     async onboard(auth, authorization, input) {
       const gymId = await scope(auth, authorization, ['admin', 'trainer']);
       const data = parse(onboardMember, input);

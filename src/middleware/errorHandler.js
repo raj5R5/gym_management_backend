@@ -1,4 +1,6 @@
 const publicErrors = {
+  IDEMPOTENCY_KEY_CONFLICT: [409, 'This idempotency key was already used with a different request.'],
+  ONBOARDING_STORAGE_UNAVAILABLE: [503, 'Combined onboarding requires transaction-capable database storage.'],
   INVALID_CREDENTIALS: [401, 'Invalid email or password.'],
   INVALID_AUTHENTICATION: [401, 'Authentication is invalid or expired.'],
   FORBIDDEN: [403, 'You do not have permission to perform this operation.'],
