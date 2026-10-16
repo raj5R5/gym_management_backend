@@ -160,7 +160,7 @@ test('inactive plan rejected and later plan edits do not alter original snapshot
 });
 test('overlap or duplicate retry creates no orphan payment', async () => {
   const token = await login(); await purchase(token);
-  error(await send('post', path(), token, input({ payment: paymentInput() })), 409, 'SUBSCRIPTION_OVERLAP');
+  error(await send('post', path(), token, input({ payment: paymentInput() })), 409, 'ACTIVE_MEMBERSHIP_EXISTS');
   assert.equal(await models.MemberSubscription.countDocuments(), 1); assert.equal(await models.Payment.countDocuments(), 0);
 });
 for (const [name, changes, status, code] of [['zero', { amountPaise: 0 }, 400, 'VALIDATION_ERROR'], ['negative', { amountPaise: -1 }, 400, 'VALIDATION_ERROR'],
@@ -185,7 +185,7 @@ test('payment reference conflict rolls back new subscription and member version 
 test('concurrent purchases serialize the member and leave one complete winning workflow', async () => {
   const token = await login(); const responses = await Promise.all([send('post', path(), token, input({ payment: paymentInput() })), send('post', path(), token, input({ payment: paymentInput() }))]);
   assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
-  assert.equal(responses.find((response) => response.status === 409).body.error.code, 'SUBSCRIPTION_OVERLAP');
+  assert.equal(responses.find((response) => response.status === 409).body.error.code, 'ACTIVE_MEMBERSHIP_EXISTS');
   assert.equal(await models.MemberSubscription.countDocuments(), 1); assert.equal(await models.Payment.countDocuments(), 1);
 });
 test('workflow and standalone subscription creation share the same concurrency guard', async () => {

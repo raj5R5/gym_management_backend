@@ -18,6 +18,9 @@ const schema = new Schema({
   dateOfBirth: { type: Date, validate: (value) => value <= new Date()
     && value.getUTCHours() === 0 && value.getUTCMinutes() === 0 && value.getUTCSeconds() === 0 && value.getUTCMilliseconds() === 0 },
   gender: { type: String, enum: genders }, address, emergencyContact,
+  photoUrl: { type: String, maxlength: 2048 },
+  photoPublicId: { type: String, maxlength: 256 },
+  photoRevision: { type: Number, min: 0, default: 0, validate: Number.isSafeInteger },
   status: { type: String, enum: statuses, required: true, default: 'active' },
 }, { timestamps: true, strict: 'throw', bufferCommands: false, autoCreate: false, autoIndex: false });
 schema.index({ gymId: 1, memberCode: 1 }, { unique: true, name: 'member_gym_code_unique' });

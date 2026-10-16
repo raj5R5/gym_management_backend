@@ -405,3 +405,83 @@ beforeEach(async () => {
   subscriptionOther = await models.MemberSubscription.create({ ...period, gymId: gymA._id, memberId: memberOther._id, membershipPlanId: planA._id });
   subscriptionB = await models.MemberSubscription.create({ ...period, gymId: gymB._id, memberId: memberB._id, membershipPlanId: planB._id });
 });
+
+// Dashboard collection supplies one key per unchanged logical receipt.
+test('idempotent cash replay returns the same immutable receipt without another installment', async () => {
+  const token = await login(); const body = input();
+  const first = await send('post', path(), token, body).set('Idempotency-Key', 'cash-replay-0001');
+  assert.equal(first.status, 201);
+  const replay = await send('post', path(), token, body).set('Idempotency-Key', 'cash-replay-0001');
+  assert.equal(replay.status, 201); assert.deepEqual(replay.body.data, first.body.data);
+  assert.equal(await models.Payment.countDocuments({ gymId: gymA._id }), 1);
+  assert.equal(replay.body.data.idempotencyKeyDigest, undefined); assert.equal(replay.body.data.requestDigest, undefined);
+  await models.MemberSubscription.updateOne({ _id: subscriptionA._id }, { status: 'cancelled' });
+  const afterCancel = await send('post', path(), token, body).set('Idempotency-Key', 'cash-replay-0001');
+  assert.equal(afterCancel.status, 201); assert.deepEqual(afterCancel.body.data, first.body.data);
+});
+test('concurrent identical keys create exactly one payment', async () => {
+  const token = await login(); const body = input();
+  const responses = await Promise.all(Array.from({ length: 4 }, () => send('post', path(), token, body).set('Idempotency-Key', 'concurrent-cash-0001')));
+  assert.deepEqual(responses.map((r) => r.status), [201, 201, 201, 201]);
+  assert.equal(new Set(responses.map((r) => r.body.data.id)).size, 1);
+  assert.equal(await models.Payment.countDocuments({ gymId: gymA._id }), 1);
+});
+test('changed payload under a committed key conflicts and cannot add a payment', async () => {
+  const token = await login(); const body = input();
+  assert.equal((await send('post', path(), token, body).set('Idempotency-Key', 'conflict-cash-0001')).status, 201);
+  error(await send('post', path(), token, { ...body, amountPaise: 50001 }).set('Idempotency-Key', 'conflict-cash-0001'), 409, 'IDEMPOTENCY_KEY_CONFLICT');
+  assert.equal(await models.Payment.countDocuments({ gymId: gymA._id }), 1);
+});
+test('new installment keys preserve partial/final payment and overpayment rules', async () => {
+  const token = await login();
+  for (const [key, amount] of [['partial-0001', 50000], ['final-0002', 100000]]) {
+    const body = input({ amountPaise: amount });
+    const first = await send('post', path(), token, body).set('Idempotency-Key', key);
+    assert.equal(first.status, 201);
+    assert.deepEqual((await send('post', path(), token, body).set('Idempotency-Key', key)).body.data, first.body.data);
+  }
+  error(await send('post', path(), token, input({ amountPaise: 1 })).set('Idempotency-Key', 'overpay-0003'), 409, 'PAYMENT_OVERPAYMENT');
+  assert.equal(await models.Payment.countDocuments({ gymId: gymA._id }), 2);
+});
+test('idempotent replay still requires current authorization and gym isolation', async () => {
+  const token = await login(); const body = input();
+  assert.equal((await send('post', path(), token, body).set('Idempotency-Key', 'scoped-key-0001')).status, 201);
+  error(await send('post', path(gymB), token, body).set('Idempotency-Key', 'scoped-key-0001'), 403, 'FORBIDDEN');
+  await models.GymAccess.updateOne({ gymId: gymA._id, userId: admin._id }, { status: 'inactive' });
+  error(await send('post', path(), token, body).set('Idempotency-Key', 'scoped-key-0001'), 403, 'FORBIDDEN');
+});
+test('malformed idempotency headers fail validation before insertion', async () => {
+  const token = await login();
+  for (const key of ['short', 'invalid space key', 'a'.repeat(129)]) error(await send('post', path(), token, input()).set('Idempotency-Key', key), 400, 'VALIDATION_ERROR');
+  assert.equal(await models.Payment.countDocuments({ gymId: gymA._id }), 0);
+});
+test('calendar payment history uses inclusive gym dates, successful totals and unpaginated summary', async () => {
+  await models.Gym.updateOne({ _id: gymA._id }, { 'settings.timezone': 'Asia/Kolkata' });
+  const token = await login();
+  for (const paidAt of ['2024-01-31T18:30:00.000Z', '2024-02-01T18:29:59.999Z', '2024-02-01T18:30:00.000Z']) await create(token, { amountPaise: 10000, paidAt });
+  const query = '?from=2024-02-01&to=2024-02-01&status=succeeded&includeMember=true&limit=1';
+  const first = await send('get', path() + query, token);
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body.meta.summary, { successfulAmountPaise: 20000, successfulPaymentCount: 2 });
+  assert.equal(first.body.data.length, 1); assert.equal(first.body.meta.pagination.total, 2);
+  assert.equal(first.body.meta.period.startUtc, '2024-01-31T18:30:00.000Z');
+  assert.equal(first.body.meta.period.endUtc, '2024-02-01T18:30:00.000Z');
+  assert.equal(first.body.data[0].member.id, String(memberA._id));
+  assert.equal(first.body.data[0].member.phone, memberA.phone);
+  const second = await send('get', path() + query + '&page=2', token);
+  assert.deepEqual(second.body.meta.summary, first.body.meta.summary);
+  assert.notEqual(second.body.data[0].id, first.body.data[0].id);
+  assert.doesNotMatch(JSON.stringify(first.body), /passwordHash|accessToken|refreshToken|idempotencyKeyDigest|requestDigest/);
+});
+test('calendar history allows future calendar endpoints, empty state and DST midnight bounds', async () => {
+  const token = await login();
+  const empty = await send('get', path() + '?from=2026-10-01&to=2026-10-31&status=succeeded', token);
+  assert.equal(empty.status, 200); assert.deepEqual(empty.body.meta.summary, { successfulAmountPaise: 0, successfulPaymentCount: 0 });
+  await models.Gym.updateOne({ _id: gymA._id }, { 'settings.timezone': 'America/New_York' });
+  const dst = await send('get', path() + '?from=2024-03-10&to=2024-03-10', token);
+  assert.equal(dst.status, 200); assert.equal(dst.body.meta.period.startUtc, '2024-03-10T05:00:00.000Z'); assert.equal(dst.body.meta.period.endUtc, '2024-03-11T04:00:00.000Z');
+});
+test('calendar history rejects invalid, reversed, overlong and mixed date filters', async () => {
+  const token = await login();
+  for (const query of ['from=2024-02-30', 'from=2024-02-02&to=2024-02-01', 'from=2024-01-01&to=2025-01-01', 'from=2024-02-01&paidFrom=2024-02-01T00:00:00Z']) error(await send('get', path() + '?' + query, token), 400, 'VALIDATION_ERROR');
+});

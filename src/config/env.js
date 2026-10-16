@@ -26,6 +26,9 @@ function strongSigningSecret(value) {
 }
 
 const envSchema = z.object({
+  CLOUDINARY_CLOUD_NAME: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional().or(z.literal('')),
+  CLOUDINARY_API_KEY: z.string().regex(/^[0-9]{1,100}$/).optional().or(z.literal('')),
+  CLOUDINARY_API_SECRET: z.string().min(10).max(256).optional().or(z.literal('')),
   JWT_ACCESS_SECRET: z.string().refine(strongSigningSecret),
   JWT_ISSUER: z.string().trim().min(1).max(200),
   JWT_AUDIENCE: z.string().trim().min(1).max(200),
@@ -42,6 +45,10 @@ const envSchema = z.object({
     value.split(',').map((origin) => origin.trim()).filter(Boolean)
   ).pipe(z.array(originSchema)),
 }).superRefine((env, context) => {
+  const photoKeys = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
+  if (photoKeys.some((key) => env[key]) && !photoKeys.every((key) => env[key])) {
+    context.addIssue({ code: 'custom', path: ['CLOUDINARY_CLOUD_NAME'], message: 'Configure all Cloudinary credentials or leave all empty' });
+  }
   if (env.ENABLE_BOOTSTRAP_ROUTES === 'true') {
     if (!['development', 'test'].includes(env.NODE_ENV)) {
       context.addIssue({ code: 'custom', path: ['ENABLE_BOOTSTRAP_ROUTES'], message: 'Bootstrap is local development/test only' });
@@ -62,6 +69,8 @@ function loadConfig(environment = process.env) {
     throw error;
   }
   return Object.freeze({
+    cloudinary: Object.freeze({ cloudName: result.data.CLOUDINARY_CLOUD_NAME,
+      apiKey: result.data.CLOUDINARY_API_KEY, apiSecret: result.data.CLOUDINARY_API_SECRET }),
     jwtAccessSecret: result.data.JWT_ACCESS_SECRET,
     jwtIssuer: result.data.JWT_ISSUER,
     jwtAudience: result.data.JWT_AUDIENCE,

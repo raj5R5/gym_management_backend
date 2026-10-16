@@ -8,7 +8,18 @@ function localDate(now, timezone) {
 }
 async function dashboardPeriod(Gym, gymId, timezone, query, now) {
   const today = localDate(now, timezone);
-  const from = query.from ?? query.to ?? today; const to = query.to ?? query.from ?? today;
+  let from = query.from ?? query.to ?? today; let to = query.to ?? query.from ?? today;
+  // UTC arithmetic advances calendar labels only; MongoDB still resolves each
+  // gym-local midnight independently, including offset changes and DST.
+  if (query.preset === 'last7Days') {
+    const first = new Date(`${today}T00:00:00.000Z`); first.setUTCDate(first.getUTCDate() - 6);
+    from = first.toISOString().slice(0, 10); to = today;
+  } else if (query.preset === 'thisMonth') {
+    from = `${today.slice(0, 7)}-01`;
+    const last = new Date(`${from}T00:00:00.000Z`); last.setUTCMonth(last.getUTCMonth() + 1); last.setUTCDate(0);
+    to = last.toISOString().slice(0, 10);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || from < '0001-01-01' || to >= '9999-12-31') failure('VALIDATION_ERROR');
   const next = new Date(`${to}T00:00:00.000Z`); next.setUTCDate(next.getUTCDate() + 1);
   const nextDate = next.toISOString().slice(0, 10);
   // Resolve each local midnight independently: offsets and DST can differ at either boundary.

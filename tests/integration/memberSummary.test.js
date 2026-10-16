@@ -213,8 +213,8 @@ test('all valid active trainer assignments appear while inactive/foreign profile
 });
 
 test('current subscription is selected by UTC period rather than creation recency', async () => {
-  const token = await login(); const current = await create(token); const older = await create(token, { startDate: day(-30) });
-  const renewed = await send('post', `${subscriptionPath()}/${current.id}/renew`, token, {}); assert.equal(renewed.status, 201);
+  const token = await login(); const older = await create(token, { startDate: day(-30) }); const current = await create(token);
+  const renewed = { body: { data: await legacySuccessor(current) } };
   const data = await summary(token); assert.equal(data.currentSubscription.id, current.id);
   assert.equal(data.currentSubscription.isCurrentlyActive, true); assert.equal(data.subscriptionHistory.total, 3);
   assert.deepEqual(data.subscriptionHistory.items.map((item) => item.id), [renewed.body.data.id, current.id, older.id]);
@@ -226,7 +226,7 @@ test('expired, cancelled and future-only subscriptions never become current', as
   const token = await login(); const expired = await create(token, { startDate: day(-30) });
   assert.equal((await summary(token)).currentSubscription, null); assert.equal(expired.endDate, day());
   const current = await create(token);
-  const future = await send('post', `${subscriptionPath()}/${current.id}/renew`, token, {}); assert.equal(future.status, 201);
+  await legacySuccessor(current);
   await send('patch', `${subscriptionPath()}/${current.id}/cancel`, token, {});
   const data = await summary(token); assert.equal(data.currentSubscription, null); assert.equal(data.currentSubscriptionPaymentSummary, null);
   assert.equal(data.subscriptionHistory.total, 3);
@@ -250,8 +250,8 @@ test('ambiguous current periods and invalid raw snapshots fail without partial r
 });
 
 test('bounded deterministic subscription history does not recursively traverse renewal chains', async () => {
-  const token = await login(); const first = await create(token); const second = await send('post', `${subscriptionPath()}/${first.id}/renew`, token, {});
-  const third = await send('post', `${subscriptionPath()}/${second.body.data.id}/renew`, token, {}); assert.equal(third.status, 201);
+  const token = await login(); const first = await create(token); const second = { body: { data: await legacySuccessor(first) } };
+  await legacySuccessor(second.body.data);
   const data = await summary(token, memberA, gymA, '?page=2&limit=1');
   assert.equal(data.currentSubscription.id, first.id); assert.equal(data.subscriptionHistory.items.length, 1);
   assert.equal(data.subscriptionHistory.items[0].id, second.body.data.id); assert.equal(data.subscriptionHistory.total, 3);
@@ -260,7 +260,7 @@ test('bounded deterministic subscription history does not recursively traverse r
 });
 
 test('successful payments aggregate exact integer paise and balance uses the subscription snapshot', async () => {
-  const token = await login(); const current = await create(token); const old = await create(token, { startDate: day(-30) });
+  const token = await login(); const old = await create(token, { startDate: day(-30) }); const current = await create(token);
   await payment(token, old, 50001, { paidAt: new Date(Date.now() - 10000).toISOString() });
   await payment(token, current, 60001, { paidAt: new Date(Date.now() - 5000).toISOString() });
   const latest = await payment(token, current, 89999);
@@ -371,7 +371,7 @@ test('summary performs no domain writes or session/transaction creation', async 
 
 test('summary uses a fixed number of aggregates as history grows and returns at most the requested page', async (t) => {
   const token = await login(); const first = await create(token); let previous = first;
-  for (let i = 0; i < 4; i += 1) { const result = await send('post', `${subscriptionPath()}/${previous.id}/renew`, token, {}); assert.equal(result.status, 201); previous = result.body.data; }
+  for (let i = 0; i < 4; i += 1) { previous = await legacySuccessor(previous); }
   const mocks = [models.MemberSubscription, models.Payment, models.Attendance, models.TrainerMemberAssignment]
     .map((model) => t.mock.method(model, 'aggregate'));
   const data = await summary(token, memberA, gymA, '?limit=2'); assert.equal(data.subscriptionHistory.items.length, 2); assert.equal(data.subscriptionHistory.total, 5);
@@ -426,3 +426,15 @@ test('trainer authorization lookup failures deny summary without returning profi
     assert.equal('data' in response.body, false); assert.equal(JSON.stringify(response.body).includes('private'), false); mocked.mock.restore();
   }
 });
+
+// Seed pre-Task-9 scheduled history only in the isolated test database. Existing
+// production records remain readable; new early renewal API writes are blocked.
+async function legacySuccessor(subscription) {
+  const source = await models.MemberSubscription.findById(subscription.id).lean();
+  const startDate = new Date(source.endDate); const endDate = new Date(startDate);
+  endDate.setUTCDate(endDate.getUTCDate() + source.durationDaysSnapshot);
+  const fields = { ...source };
+  delete fields._id; delete fields.__v; delete fields.createdAt; delete fields.updatedAt;
+  const record = await models.MemberSubscription.create({ ...fields, previousSubscriptionId: source._id, startDate, endDate, status: 'active' });
+  return { id: String(record._id), startDate: startDate.toISOString().slice(0, 10), endDate: endDate.toISOString().slice(0, 10), isCurrentlyActive: false };
+}

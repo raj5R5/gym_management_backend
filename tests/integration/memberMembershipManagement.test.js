@@ -190,16 +190,16 @@ test('cancellation is idempotent, preserves snapshots, history and all successfu
   assert.equal(history.data.currentMembership, null); assert.equal(history.data.subscriptions[0].status, 'cancelled');
   assert.deepEqual(history.data.subscriptions[0].paymentSummary, { totalSuccessfulPaidPaise: 50000, remainingBalancePaise: 100000 });
 });
-test('expired and adjacent future renewals respect exclusive current-date boundaries', async () => {
+test('expired renewal respects exclusive boundaries and blocks another early renewal', async () => {
   const token = await login(); const old = await create(token, { startDate: day(-30) });
   const renewal = await send('post', `${subscriptionPath()}/${old.id}/renew`, token, {}); assert.equal(renewal.status, 201);
   assert.equal((await list(token)).data.currentMembership.id, renewal.body.data.id);
-  const future = await send('post', `${subscriptionPath()}/${renewal.body.data.id}/renew`, token, {}); assert.equal(future.status, 201);
-  const before = await models.MemberSubscription.findById(future.body.data.id).lean();
+  error(await send('post', `${subscriptionPath()}/${renewal.body.data.id}/renew`, token, {}), 409, 'ACTIVE_MEMBERSHIP_EXISTS');
+  const before = await models.MemberSubscription.findById(renewal.body.data.id).lean();
   await send('post', itemPath(old)+'/cancel', token, {});
-  assert.deepEqual(await models.MemberSubscription.findById(future.body.data.id).lean(), before);
+  assert.deepEqual(await models.MemberSubscription.findById(renewal.body.data.id).lean(), before);
   const result = await list(token); assert.equal(result.data.currentMembership.id, renewal.body.data.id);
-  assert.equal(result.data.subscriptions[0].isCurrentlyActive, false);
+  assert.equal(result.data.subscriptions[0].isCurrentlyActive, true);
   error(await send('post', `${subscriptionPath()}/${old.id}/renew`, token, {}), 409, 'SUBSCRIPTION_CANCELLED');
 });
 test('current membership ignores mutable plan status and preserves historical terms', async () => {

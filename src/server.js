@@ -60,6 +60,7 @@ async function startServer({
           logger.error('HTTP server shutdown failed');
         }
         try {
+          await app?.locals.memberPhotoService?.stopCleanup();
           await database.disconnect();
         } catch {
           failed = true;
@@ -92,12 +93,16 @@ async function startServer({
     if (database.connection?.models?.AuthSession) {
       await Promise.all([
         database.connection.models.AuthSession.createIndexes(),
+        database.connection.models.Gym.createIndexes(),
         database.connection.models.RefreshTokenRecord.createIndexes(),
         database.connection.models.MemberProfile.createIndexes(),
+        database.connection.models.MemberPhotoOperation?.createIndexes(),
+        database.connection.models.MemberPhotoCleanup?.createIndexes(),
         database.connection.models.TrainerProfile.createIndexes(),
         database.connection.models.TrainerMemberAssignment.createIndexes(),
         database.connection.models.MembershipPlan.createIndexes(),
         database.connection.models.MemberSubscription.createIndexes(),
+        database.connection.models.RenewalOperation.createIndexes(),
         database.connection.models.Payment.createIndexes(),
         database.connection.models.Attendance.createIndexes(),
         database.connection.models.MemberActivation.createIndexes(),
@@ -133,6 +138,7 @@ async function startServer({
       server.once('listening', resolve);
       server.once('error', reject);
     });
+    app.locals.memberPhotoService?.startCleanup();
     logger.info({ port: config.port }, 'API server started');
     server.on('error', () => {
       logger.error('HTTP server error');

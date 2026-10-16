@@ -144,7 +144,7 @@ test('concurrent requests cannot create overlapping subscriptions even through d
   const token = await login();
   const responses = await Promise.all([send('post', path(), token, input()), send('post', path(), token, input({ startDate: day(-1) }))]);
   assert.deepEqual(responses.map((value) => value.status).sort(), [201, 409]);
-  error(responses.find((value) => value.status === 409), 409, 'SUBSCRIPTION_OVERLAP');
+  error(responses.find((value) => value.status === 409), 409, 'ACTIVE_MEMBERSHIP_EXISTS');
   assert.equal(await models.MemberSubscription.countDocuments(), 1);
 });
 
@@ -337,7 +337,7 @@ test('future existing ranges still participate in overlap checks and corrupt raw
   await models.MemberSubscription.create({ gymId: gymA._id, memberId: memberA._id, membershipPlanId: planA._id,
     startDate: new Date(`${day(1)}T00:00:00Z`), endDate: new Date(`${day(31)}T00:00:00Z`), status: 'active',
     planNameSnapshot: 'Monthly', durationDaysSnapshot: 30, pricePaiseSnapshot: 150000 });
-  error(await send('post', path(), token, input()), 409, 'SUBSCRIPTION_OVERLAP');
+  error(await send('post', path(), token, input()), 409, 'ACTIVE_MEMBERSHIP_EXISTS');
   const future = await send('get', path(), token);
   assert.equal(future.status, 200); assert.equal(future.body.data[0].isCurrentlyActive, false);
   await models.MembershipPlan.collection.updateOne({ _id: planA._id }, { $set: { price: 0.5 } });
@@ -416,4 +416,33 @@ beforeEach(async () => {
   const plan = { name: 'Monthly', durationDays: 30, price: 150000 };
   planA = await models.MembershipPlan.create({ ...plan, gymId: gymA._id });
   planB = await models.MembershipPlan.create({ ...plan, gymId: gymB._id });
+});
+
+
+test('an unexpired membership blocks direct API creation even for a disjoint historical period', async () => {
+  const token = await login(); const first = await create(token);
+  const old = await models.MemberSubscription.findById(first.id).lean();
+  const profile = await models.MemberProfile.findById(memberA._id).lean();
+  error(await send('post', path(), token, input({ startDate: day(-120) })), 409, 'ACTIVE_MEMBERSHIP_EXISTS');
+  assert.equal(await models.MemberSubscription.countDocuments(), 1);
+  assert.deepEqual(await models.MemberSubscription.findById(first.id).lean(), old);
+  assert.deepEqual(await models.MemberProfile.findById(memberA._id).lean(), profile);
+});
+test('exclusive end reached permits a purchase even when the old membership is entirely unpaid', async () => {
+  const token = await login(); const first = await create(token, { startDate: day(-30) });
+  assert.equal(first.endDate, day()); assert.equal(first.status, 'expired');
+  assert.equal(await models.Payment.countDocuments(), 0);
+  const next = await create(token);
+  assert.equal(next.isCurrentlyActive, true);
+  assert.equal(await models.MemberSubscription.countDocuments(), 2);
+  assert.equal((await models.MemberSubscription.findById(first.id)).pricePaiseSnapshot, 150000);
+});
+test('cancelled membership permits a new purchase while preserving its unpaid history', async () => {
+  const token = await login(); const first = await create(token);
+  assert.equal((await send('patch', `${path()}/${first.id}/cancel`, token, {})).status, 200);
+  await create(token);
+  assert.equal(await models.MemberSubscription.countDocuments(), 2);
+  const historical = await models.MemberSubscription.findById(first.id).lean();
+  assert.equal(historical.status, 'cancelled'); assert.equal(historical.pricePaiseSnapshot, 150000);
+  assert.equal(await models.Payment.countDocuments(), 0);
 });

@@ -52,6 +52,36 @@ function createDashboardService({ Gym, MemberProfile, TrainerProfile, Membership
     if (result?.invalid) fail('INVALID_FINANCIAL_STATE');
     return { periodSuccessfulAmountPaise: exactMoney(result?.amount), periodSuccessfulCount: count(result?.total) };
   }
+  async function outstanding(gymId, branchId) {
+    // A current receivable, independent of revenue's paidAt/date-period filter.
+    // One row per subscription; aggregate payments inside the lookup so multiple
+    // installments cannot multiply the price snapshot or another member's debt.
+    const validPaise = (field, minimum) => ({ $cond: [{ $isNumber: field }, { $and: [
+      { $gte: [field, minimum] }, { $lte: [field, MAX_PRICE_PAISE] },
+      { $eq: [field, { $trunc: field }] },
+    ] }, false] });
+    const decimal = (field) => ({ $convert: { input: field, to: 'decimal', onError: 0, onNull: 0 } });
+    const [result] = await MemberSubscription.aggregate([
+      { $match: { gymId, status: { $ne: 'cancelled' } } }, ...memberJoin(gymId, branchId),
+      { $lookup: { from: MembershipPlan.collection.name, localField: 'membershipPlanId', foreignField: '_id',
+        pipeline: [{ $match: { gymId } }, { $project: { _id: 1 } }], as: 'plan' } }, { $unwind: '$plan' },
+      { $lookup: { from: Payment.collection.name, let: { id: '$_id', memberId: '$memberId' },
+        pipeline: [{ $match: { gymId, status: 'succeeded', $expr: { $and: [
+          { $eq: ['$subscriptionId', '$$id'] }, { $eq: ['$memberId', '$$memberId'] },
+        ] } } },
+        { $group: { _id: null, amount: { $sum: decimal('$amountPaise') },
+          invalid: { $sum: { $cond: [validPaise('$amountPaise', 1), 0, 1] } } } }], as: 'paid' } },
+      { $set: { balance: { $subtract: [decimal('$pricePaiseSnapshot'), { $ifNull: [{ $arrayElemAt: ['$paid.amount', 0] }, 0] }] },
+        validPrice: validPaise('$pricePaiseSnapshot', 0),
+        invalidPayments: { $ifNull: [{ $arrayElemAt: ['$paid.invalid', 0] }, 0] } } },
+      { $group: { _id: null, amount: { $sum: '$balance' }, invalid: { $sum: { $cond: [{ $and: [
+        '$validPrice', { $in: ['$status', ['active', 'expired']] },
+        { $eq: ['$invalidPayments', 0] }, { $gte: ['$balance', 0] },
+      ] }, 0, 1] } } } },
+    ]);
+    if (result?.invalid) fail('INVALID_FINANCIAL_STATE');
+    return exactMoney(result?.amount);
+  }
   async function attendance(gymId, branchId, start, end) {
     const [result] = await Attendance.aggregate([{ $match: { gymId, ...(branchId ? { branchId } : {}),
       $or: [{ status: 'open' }, { status: 'completed', checkInAt: { $gte: start, $lt: end } }] } },
@@ -77,10 +107,10 @@ function createDashboardService({ Gym, MemberProfile, TrainerProfile, Membership
     const gym = await Gym.findOne({ _id: gymId, status: 'active' }).select('settings.timezone').lean(); if (!gym) fail('FORBIDDEN');
     const timezone = gym.settings?.timezone ?? 'UTC'; if (typeof timezone !== 'string' || !timezone) fail();
     const period = await dashboardPeriod(Gym, gymId, timezone, input, clock());
-    const [members, trainers, subs, paid, visits] = await Promise.all([profiles(MemberProfile, gymId, branchId),
+    const [members, trainers, subs, paid, visits, dues] = await Promise.all([profiles(MemberProfile, gymId, branchId),
       profiles(TrainerProfile, gymId, branchId), subscriptions(gymId, branchId, period.today),
-      payments(gymId, branchId, period.start, period.end), attendance(gymId, branchId, period.start, period.end)]);
-    return { period: period.dto, members, trainers, subscriptions: subs, payments: paid, attendance: visits };
+      payments(gymId, branchId, period.start, period.end), attendance(gymId, branchId, period.start, period.end), outstanding(gymId, branchId)]);
+    return { period: period.dto, members, trainers, subscriptions: subs, payments: { ...paid, outstandingAmountPaise: dues }, attendance: visits };
   } };
 }
 module.exports = { createDashboardService };

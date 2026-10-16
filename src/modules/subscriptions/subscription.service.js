@@ -1,7 +1,7 @@
 const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
 const { createPlan } = require('../membershipPlans/plan.validation');
-const { today, calendarDate, createSubscription, renewSubscription, cancelSubscription, subscriptionListInput } = require('./subscription.validation');
+const { today, calendarDate, createSubscription, renewSubscription, renewalPurchase, renewalPreviewQuery, cancelSubscription, subscriptionListInput } = require('./subscription.validation');
 function fail(code) { const error = new Error('Subscription operation failed.'); error.code = code; throw error; }
 function parse(schema, value) {
   const result = schema.safeParse(value); if (!result.success) fail('VALIDATION_ERROR'); return result.data;
@@ -76,13 +76,51 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
       { $inc: { __v: 1 } }, { session, returnDocument: 'after', timestamps: false }).select('_id status').lean();
     if (!member) fail('MEMBER_NOT_FOUND'); if (member.status !== 'active') fail('FORBIDDEN');
   }
-  async function insertPeriod(gymId, data, session) {
-    const plan = await MembershipPlan.findOne({ _id: data.membershipPlanId, gymId }).session(session).lean();
+  async function requireNoUnexpiredMembership(gymId, memberId, session) {
+    // Lifecycle is date-derived, just like dto/list: future periods are also
+    // unexpired. This read runs AFTER the shared member version write for every
+    // creation path, so competing transactions retry against the winner's state.
+    if (await MemberSubscription.exists({ gymId, memberId, status: { $ne: 'cancelled' },
+      endDate: { $gt: midnight() } }).session(session)) fail('ACTIVE_MEMBERSHIP_EXISTS');
+  }
+  async function currentPlan(gymId, planId, session) {
+    const plan = await MembershipPlan.findOne({ _id: planId, gymId }).session(session).lean();
     if (!plan) fail('PLAN_NOT_FOUND'); if (plan.status !== 'active') fail('FORBIDDEN');
     parse(createPlan, { name: plan.name, durationDays: plan.durationDays, price: plan.price, status: plan.status });
-    const startDate = new Date(`${parse(calendarDate, data.startDate)}T00:00:00.000Z`);
+    return plan;
+  }
+  function period(plan, start) {
+    const startDate = new Date(`${parse(calendarDate, start)}T00:00:00.000Z`);
     const endDate = new Date(startDate); endDate.setUTCDate(endDate.getUTCDate() + plan.durationDays);
     parse(calendarDate, endDate.toISOString().slice(0, 10));
+    return { startDate, endDate };
+  }
+  async function renewalContext(gymId, previous, data, session) {
+    dto(previous);
+    if (previous.status === 'cancelled') fail('SUBSCRIPTION_CANCELLED');
+    if (previous.previousSubscriptionId && !await MemberSubscription.exists({ _id: previous.previousSubscriptionId, gymId,
+      memberId: previous.memberId, endDate: { $lte: previous.startDate } }).session(session)) fail('SUBSCRIPTION_NOT_FOUND');
+    if (await MemberSubscription.exists({ gymId, previousSubscriptionId: previous._id }).session(session)) fail('SUBSCRIPTION_ALREADY_RENEWED');
+    const member = await MemberProfile.findOne({ _id: previous.memberId, gymId }).session(session).lean();
+    if (!member) fail('MEMBER_NOT_FOUND'); if (member.status !== 'active') fail('FORBIDDEN');
+    const plan = await currentPlan(gymId, data.planId ?? previous.membershipPlanId, session);
+    const previousEnd = previous.endDate.toISOString().slice(0, 10);
+    const currentDay = today();
+    const start = data.startDate ?? (previousEnd > currentDay ? previousEnd : currentDay);
+    if (start < previousEnd) fail('SUBSCRIPTION_OVERLAP');
+    await requireNoUnexpiredMembership(gymId, previous.memberId, session);
+    const dates = period(plan, start);
+    const overlap = await MemberSubscription.exists({ gymId, memberId: previous.memberId, status: { $ne: 'cancelled' },
+      startDate: { $lt: dates.endDate }, endDate: { $gt: dates.startDate } }).session(session);
+    if (overlap) fail('SUBSCRIPTION_OVERLAP');
+    const terms = { planName: plan.name, durationDays: plan.durationDays, pricePaise: plan.price,
+      startDate: start, endDate: dates.endDate.toISOString().slice(0, 10) };
+    return { member, plan, dates, terms };
+  }
+  async function insertPeriod(gymId, data, session, selectedPlan) {
+    const plan = selectedPlan ?? await currentPlan(gymId, data.membershipPlanId, session);
+    await requireNoUnexpiredMembership(gymId, data.memberId, session);
+    const { startDate, endDate } = period(plan, data.startDate);
     const overlap = await MemberSubscription.exists({ gymId, memberId: data.memberId, status: { $ne: 'cancelled' },
       startDate: { $lt: endDate }, endDate: { $gt: startDate } }).session(session);
     if (overlap) fail('SUBSCRIPTION_OVERLAP');
@@ -91,6 +129,23 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
       durationDaysSnapshot: plan.durationDays, pricePaiseSnapshot: plan.price,
       status: endDate <= midnight() ? 'expired' : 'active', notes: data.notes }], { session });
     return dto(record.toObject());
+  }
+  async function renewInSession(gymId, id, data, session) {
+    const previous = await MemberSubscription.findOne({ _id: id, gymId }).session(session).lean();
+    if (!previous) fail('SUBSCRIPTION_NOT_FOUND');
+    dto(previous); // Unknown lifecycle states must never authorize a renewal.
+    await lockMember(gymId, previous.memberId, session);
+    // Conflict with cancellation/payment writes without changing historical terms or timestamps.
+    const locked = await MemberSubscription.findOneAndUpdate({ _id: id, gymId },
+      { $inc: { __v: 1 } }, { session, returnDocument: 'after', timestamps: false });
+    if (!locked) fail('SUBSCRIPTION_NOT_FOUND');
+    const context = await renewalContext(gymId, previous, data, session);
+    if (data.expectedTerms && Object.entries(context.terms).some(([key, value]) => data.expectedTerms[key] !== value)) {
+      fail('RENEWAL_PREVIEW_CHANGED');
+    }
+    const startDate = context.terms.startDate;
+    return insertPeriod(gymId, { memberId: previous.memberId, membershipPlanId: context.plan._id,
+      previousSubscriptionId: previous._id, startDate, notes: data.notes }, session, context.plan);
   }
   async function cancelRecord(selected, subscriptionId, data) {
     const record = await MemberSubscription.findOneAndUpdate({ _id: subscriptionId, gymId: selected.gymId, ...(selected.memberId ? { memberId: selected.memberId } : {}), status: { $ne: 'cancelled' } },
@@ -120,31 +175,27 @@ function createSubscriptionService({ MemberSubscription, MemberProfile, Membersh
       await lockMember(selected.gymId, data.memberId, session);
       return insertPeriod(selected.gymId, data, session);
     },
-    async renew(auth, authorization, subscriptionId, input) {
-      const { gymId } = await scope(auth, authorization, ['admin']);
-      const id = parse(objectId, subscriptionId); const data = parse(renewSubscription, input);
+    async renewalPreview(auth, authorization, subscriptionId, query = {}) {
+      const { gymId } = await scope(auth, authorization, ['admin']); const id = parse(objectId, subscriptionId);
       return transaction(async (session) => {
         const previous = await MemberSubscription.findOne({ _id: id, gymId }).session(session).lean();
         if (!previous) fail('SUBSCRIPTION_NOT_FOUND');
-        dto(previous); // Unknown lifecycle states must never authorize a renewal.
-        await lockMember(gymId, previous.memberId, session);
-        // Conflict with cancellation/payment writes without changing historical terms or timestamps.
-        const locked = await MemberSubscription.findOneAndUpdate({ _id: id, gymId },
-          { $inc: { __v: 1 } }, { session, returnDocument: 'after', timestamps: false });
-        if (!locked) fail('SUBSCRIPTION_NOT_FOUND');
-        if (previous.status === 'cancelled') fail('SUBSCRIPTION_CANCELLED');
-        if (previous.previousSubscriptionId) {
-          const predecessor = await MemberSubscription.exists({ _id: previous.previousSubscriptionId, gymId,
-            memberId: previous.memberId, endDate: { $lte: previous.startDate } }).session(session);
-          if (!predecessor) fail('SUBSCRIPTION_NOT_FOUND');
-        }
-        const successor = await MemberSubscription.exists({ gymId, previousSubscriptionId: id }).session(session);
-        if (successor) fail('SUBSCRIPTION_ALREADY_RENEWED');
-        const startDate = data.startDate ?? previous.endDate.toISOString().slice(0, 10);
-        if (startDate < previous.endDate.toISOString().slice(0, 10)) fail('SUBSCRIPTION_OVERLAP');
-        return insertPeriod(gymId, { memberId: previous.memberId, membershipPlanId: previous.membershipPlanId,
-          previousSubscriptionId: previous._id, startDate, notes: data.notes }, session);
+        const { member, plan, terms } = await renewalContext(gymId, previous, parse(renewalPreviewQuery, query), session);
+        return { gymId: String(gymId), subscriptionId: String(previous._id),
+          member: { id: String(member._id), firstName: member.firstName, lastName: member.lastName, memberCode: member.memberCode },
+          planId: String(plan._id), previousEndDate: previous.endDate.toISOString().slice(0, 10),
+          calendarTimezone: 'UTC', terms, initialPaymentPaise: 0, outstandingBalancePaise: terms.pricePaise };
       });
+    },
+    async renew(auth, authorization, subscriptionId, input) {
+      const { gymId } = await scope(auth, authorization, ['admin']);
+      const id = parse(objectId, subscriptionId); const data = parse(renewSubscription, input);
+      return transaction((session) => renewInSession(gymId, id, data, session));
+    },
+    async renewForPurchase(auth, authorization, subscriptionId, input, session) {
+      if (!session?.inTransaction() || session.client !== MemberSubscription.db.getClient()) fail('INVALID_TRANSACTION_CONTEXT');
+      const { gymId } = await scope(auth, authorization, ['admin']);
+      return renewInSession(gymId, parse(objectId, subscriptionId), parse(renewalPurchase, input), session);
     },
     async get(auth, authorization, subscriptionId) { return dto(await existing(await readScope(auth, authorization), subscriptionId)); },
     async list(auth, authorization, query) {

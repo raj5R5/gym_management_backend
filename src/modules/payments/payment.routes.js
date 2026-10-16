@@ -12,7 +12,7 @@ function createPaymentRouter(service, authService, authorization) {
     try { await service.authorizeRead(req.auth, req.authorization, req.validated.params?.paymentId); next(); }
     catch (error) { next(error); }
   };
-  router.post('/', authorization.requireRoles('admin'), validate({ body: schemas.createPayment }), controller.create);
+  router.post('/', authorization.requireRoles('admin'), validate({ body: schemas.createPayment, headers: schemas.paymentHeaders }), controller.create);
   router.get('/', authorization.requireRoles('admin', 'trainer'), validate({ query: schemas.paymentListQuery }), readGuard, controller.list);
   router.get('/:paymentId', authorization.requireRoles('admin', 'trainer'), validate({ params: schemas.paymentParams }), readGuard, controller.get);
   return router;

@@ -1,3 +1,4 @@
+const { photoFields } = require('../memberPhotos/photo.dto');
 const { exactTotal } = require('../payments/payment.service');
 const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
@@ -10,7 +11,7 @@ function parse(schema, input) { const result = schema.safeParse(input); if (!res
 function pick(value, fields) { return value ? Object.fromEntries(fields.filter((field) => value[field] !== undefined).map((field) => [field, value[field]])) : undefined; }
 const addressFields = ['line1', 'line2', 'city', 'state', 'postalCode', 'countryCode'];
 function profileDto(member, branch) {
-  return { member: { id: String(member._id), ...pick(member, ['memberCode', 'firstName', 'lastName', 'phone', 'status', 'gender', 'createdAt', 'updatedAt']),
+  return { member: { ...photoFields(member), id: String(member._id), ...pick(member, ['memberCode', 'firstName', 'lastName', 'phone', 'status', 'gender', 'createdAt', 'updatedAt']),
     branchId: branch ? String(branch._id) : null, dateOfBirth: member.dateOfBirth?.toISOString().slice(0, 10),
     address: pick(member.address, addressFields), emergencyContact: pick(member.emergencyContact, ['name', 'phone', 'relationship']) },
   currentBranch: branch ? { id: String(branch._id), name: branch.name, status: branch.status,
@@ -59,7 +60,7 @@ function createMemberSummaryService({ MemberProfile, Branch, TrainerProfile, Tra
       if (!await TrainerMemberAssignment.exists({ gymId: current.gymId, trainerId: trainers[0]._id, memberId: id, status: 'active' })) fail('MEMBER_NOT_FOUND');
     }
     const member = await MemberProfile.findOne({ _id: id, gymId: current.gymId })
-      .select('memberCode firstName lastName phone status branchId dateOfBirth gender address emergencyContact createdAt updatedAt').lean();
+      .select('gymId photoUrl photoPublicId photoRevision memberCode firstName lastName phone status branchId dateOfBirth gender address emergencyContact createdAt updatedAt').lean();
     if (!member) fail('MEMBER_NOT_FOUND'); return { member, gymId: new Types.ObjectId(current.gymId) };
   }
   function subscriptionLinks(gymId) {

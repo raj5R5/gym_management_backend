@@ -1,3 +1,9 @@
+const { photoModels } = require('./modules/memberPhotos/photo.model');
+const { createPhotoService } = require('./modules/memberPhotos/photo.service');
+const { createPhotoStorage } = require('./modules/memberPhotos/photo.storage');
+const { createPhotoRouter } = require('./modules/memberPhotos/photo.routes');
+const { getRenewalOperationModel } = require('./modules/subscriptions/renewal_operation.model');
+const { createRenewalService } = require('./modules/subscriptions/renewal.service');
 const { getMemberOnboardingOperationModel } = require('./modules/memberOnboardingComplete/operation.model');
 const { createCompleteOnboardingService } = require('./modules/memberOnboardingComplete/complete.service');
 const { createCompleteOnboardingRouter } = require('./modules/memberOnboardingComplete/complete.routes');
@@ -46,6 +52,8 @@ const { getAuthSessionModel } = require('./modules/auth/authSession.model');
 const { getRefreshTokenModel } = require('./modules/auth/refreshToken.model');
 const { createAuthService } = require('./modules/auth/auth.service');
 const { createAuthRouter } = require('./modules/auth/auth.routes');
+const { createOwnerRegistrationService } = require('./modules/ownerRegistration/registration.service');
+const { createOwnerRegistrationRouter } = require('./modules/ownerRegistration/registration.routes');
 const helmet = require('helmet');
 const cors = require('cors');
 const pinoHttp = require('pino-http');
@@ -67,7 +75,7 @@ const { getGymAccessModel } = require('./modules/gymAccess/gymAccess.model');
 const { createGymAccessService } = require('./modules/gymAccess/gymAccess.service');
 const { createGymAccessRouter } = require('./modules/gymAccess/gymAccess.routes');
 
-function buildApp({ config, logger = createLogger(config), database, bootstrap = false } = {}) {
+function buildApp({ config, logger = createLogger(config), database, photoStorage, bootstrap = false } = {}) {
   const app = express();
   app.disable('x-powered-by');
   // No proxy is trusted until the deployment topology is explicitly configured.
@@ -152,6 +160,11 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       RefreshTokenRecord: getRefreshTokenModel(database.connection), config, logger,
     });
     app.use('/api/v1/auth', createAuthRouter(authService, config));
+    const ownerRegistrationService = createOwnerRegistrationService({
+      UserAccount: getUserAccountModel(database.connection), Gym: getGymModel(database.connection),
+      GymAccess: getGymAccessModel(database.connection),
+    });
+    app.use('/api/v1/auth', createOwnerRegistrationRouter(ownerRegistrationService));
     const authorizationService = createAuthorizationService({
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
       Branch: getBranchModel(database.connection),
@@ -177,6 +190,11 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       createAuthorizationMiddleware(authorizationService)));
     const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
+    const memberPhotoService = createPhotoService({ MemberProfile: getMemberProfileModel(database.connection),
+      ...photoModels(database.connection), authorizationService, storage: photoStorage ?? createPhotoStorage(config), logger });
+    app.locals.memberPhotoService = memberPhotoService;
+    app.use('/api/v1/gyms/:gymId/members/:memberId/photo', createPhotoRouter(memberPhotoService, authService,
+      createAuthorizationMiddleware(authorizationService)));
     const memberAccountService = createMemberAccountService({ MemberProfile: getMemberProfileModel(database.connection),
       UserAccount: getUserAccountModel(database.connection), GymAccess: getGymAccessModel(database.connection),
       Gym: getGymModel(database.connection), MemberActivation: getMemberActivationModel(database.connection), authorizationService, logger });
@@ -208,12 +226,14 @@ function buildApp({ config, logger = createLogger(config), database, bootstrap =
       MemberProfile: getMemberProfileModel(database.connection), MembershipPlan: getMembershipPlanModel(database.connection),
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
       authorizationService });
-    app.use('/api/v1/gyms/:gymId/subscriptions', createSubscriptionRouter(subscriptionService, authService,
-      createAuthorizationMiddleware(authorizationService)));
-    const paymentService = createPaymentService({ Payment: getPaymentModel(database.connection),
+    const paymentService = createPaymentService({ Gym: getGymModel(database.connection), Payment: getPaymentModel(database.connection),
       MemberSubscription: getMemberSubscriptionModel(database.connection), MemberProfile: getMemberProfileModel(database.connection),
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
       authorizationService });
+    const renewalService = createRenewalService({ RenewalOperation: getRenewalOperationModel(database.connection),
+      subscriptionService, paymentService, authorizationService });
+    app.use('/api/v1/gyms/:gymId/subscriptions', createSubscriptionRouter(subscriptionService, authService,
+      createAuthorizationMiddleware(authorizationService), renewalService));
     app.use('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const completeOnboardingService = createCompleteOnboardingService({

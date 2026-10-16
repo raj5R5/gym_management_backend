@@ -11,8 +11,12 @@ const schema = new Schema({
   paidAt: { type: Date, required: true, immutable: true, min: new Date('1970-01-01T00:00:00Z'), validate: (value) => value <= new Date() },
   transactionReference: { type: String, trim: true, immutable: true, minlength: 3, maxlength: 120, match: /^[A-Za-z0-9][A-Za-z0-9 ._:/-]*$/ },
   notes: { type: String, trim: true, immutable: true, minlength: 1, maxlength: 2000 },
+  idempotencyKeyDigest: { type: String, immutable: true, match: /^[a-f0-9]{64}$/ },
+  requestDigest: { type: String, immutable: true, match: /^[a-f0-9]{64}$/ },
   recordedByUserId: { type: Schema.Types.ObjectId, ref: 'UserAccount', immutable: true },
 }, { timestamps: true, strict: 'throw', bufferCommands: false, autoCreate: false, autoIndex: false });
+schema.index({ gymId: 1, recordedByUserId: 1, idempotencyKeyDigest: 1 }, { unique: true,
+  partialFilterExpression: { idempotencyKeyDigest: { $type: 'string' } }, name: 'payment_actor_gym_key_unique' });
 schema.index({ gymId: 1, paymentMethod: 1, transactionReference: 1 }, { unique: true,
   partialFilterExpression: { status: 'succeeded', transactionReference: { $type: 'string' } }, name: 'payment_gym_method_reference_unique' });
 schema.index({ gymId: 1, subscriptionId: 1, status: 1 }, { name: 'payment_subscription_total' });

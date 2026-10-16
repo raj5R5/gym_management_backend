@@ -217,7 +217,7 @@ test('membership uses immutable snapshots and exclusive UTC boundaries across pa
   const adminToken = await login(); const cancelled = await create(adminToken, { startDate: day(-90) });
   assert.equal((await send('patch', `${subscriptionPath()}/${cancelled.id}/cancel`, adminToken, {})).status, 200);
   const expired = await create(adminToken, { startDate: day(-30) }); const current = await create(adminToken);
-  const renewed = await send('post', `${subscriptionPath()}/${current.id}/renew`, adminToken, {}); assert.equal(renewed.status, 201); const future = renewed.body.data;
+  const future = await legacySuccessor(current);
   await models.MembershipPlan.updateOne({ _id: planA._id }, { status: 'inactive', name: 'Changed', durationDays: 60, price: 300000 });
   const token = await login(member); const result = await read('membership', token);
   assert.equal(result.data.currentMembership.id, current.id); assert.equal(result.data.currentMembership.planNameSnapshot, 'Monthly'); assert.equal(result.data.currentMembership.pricePaiseSnapshot, 150000);
@@ -352,3 +352,15 @@ test('members remain denied from staff workflows and no self-service writes or I
   for (const kind of kinds) for (const method of ['post','patch','delete']) error(await send(method, selfPath(kind), token, {}), 404, 'NOT_FOUND');
   const bootstrap = createBootstrapApp({ config: { ...config, enableBootstrapRoutes: true }, database }); error(await request(bootstrap).get(selfPath('profile')), 401, 'INVALID_AUTHENTICATION');
 });
+
+// Seed pre-Task-9 scheduled history only in the isolated test database. Existing
+// production records remain readable; new early renewal API writes are blocked.
+async function legacySuccessor(subscription) {
+  const source = await models.MemberSubscription.findById(subscription.id).lean();
+  const startDate = new Date(source.endDate); const endDate = new Date(startDate);
+  endDate.setUTCDate(endDate.getUTCDate() + source.durationDaysSnapshot);
+  const fields = { ...source };
+  delete fields._id; delete fields.__v; delete fields.createdAt; delete fields.updatedAt;
+  const record = await models.MemberSubscription.create({ ...fields, previousSubscriptionId: source._id, startDate, endDate, status: 'active' });
+  return { id: String(record._id), startDate: startDate.toISOString().slice(0, 10), endDate: endDate.toISOString().slice(0, 10), isCurrentlyActive: false };
+}

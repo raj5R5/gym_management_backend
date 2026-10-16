@@ -172,8 +172,8 @@ test('no subscription, expired exclusive end and cancelled membership reject che
 
 test('future active renewal never authorizes attendance; the current period is selected', async () => {
   const token = await login(); const current = await create(token);
-  const future = await send('post', `${subscriptionPath()}/${current.id}/renew`, token, {});
-  assert.equal(future.status, 201); assert.equal(future.body.data.isCurrentlyActive, false);
+  error(await send('post', `${subscriptionPath()}/${current.id}/renew`, token, {}), 409, 'ACTIVE_MEMBERSHIP_EXISTS');
+  const future = await legacySuccessor(current); assert.equal(future.isCurrentlyActive, false);
   const data = await visit(token); assert.equal(data.subscriptionId, current.id);
   await send('post', out(data), token, {});
   await send('patch', `${subscriptionPath()}/${current.id}/cancel`, token, {});
@@ -274,7 +274,8 @@ test('plan edits and renewals never change historical attendance or collect mone
   const token = await login(); const subscription = await create(token); const data = await visit(token);
   const before = await models.Attendance.findById(data.id).lean();
   await models.MembershipPlan.updateOne({ _id: planA._id }, { $set: { price: 180000 } });
-  assert.equal((await send('post', `${subscriptionPath()}/${subscription.id}/renew`, token, {})).status, 201);
+  error(await send('post', `${subscriptionPath()}/${subscription.id}/renew`, token, {}), 409, 'ACTIVE_MEMBERSHIP_EXISTS');
+  await legacySuccessor(subscription);
   assert.deepEqual(await models.Attendance.findById(data.id).lean(), before);
   assert.deepEqual((await send('get', `${path()}/${data.id}`, token)).body.data, data);
   assert.equal(await models.Payment.countDocuments(), 0);
@@ -462,3 +463,15 @@ test('corrupted predecessor linkage cannot authorize attendance through a curren
   error(await send('post', `${path()}/check-in`, token, checkInInput()), 409, 'ATTENDANCE_MEMBERSHIP_REQUIRED');
   assert.equal(await models.Attendance.countDocuments(), 0);
 });
+
+// Seed pre-Task-9 scheduled history only in the isolated test database. Existing
+// production records remain readable; new early renewal API writes are blocked.
+async function legacySuccessor(subscription) {
+  const source = await models.MemberSubscription.findById(subscription.id).lean();
+  const startDate = new Date(source.endDate); const endDate = new Date(startDate);
+  endDate.setUTCDate(endDate.getUTCDate() + source.durationDaysSnapshot);
+  const fields = { ...source };
+  delete fields._id; delete fields.__v; delete fields.createdAt; delete fields.updatedAt;
+  const record = await models.MemberSubscription.create({ ...fields, previousSubscriptionId: source._id, startDate, endDate, status: 'active' });
+  return { id: String(record._id), startDate: startDate.toISOString().slice(0, 10), endDate: endDate.toISOString().slice(0, 10), isCurrentlyActive: false };
+}

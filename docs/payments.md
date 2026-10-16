@@ -163,3 +163,9 @@ invalid monetary data or mismatched collected records fail closed.
 
 Tests use owned temporary MongoDB replica sets, plus an isolated standalone
 failure test. No real .env or development/production database is used.
+
+## Dashboard drill-down and idempotent collection
+
+GET keeps its existing route and timestamp filters. Optional `from`/`to` calendar dates use the dashboard's inclusive gym-local date policy (maximum 366 days) and cannot be combined with `paidFrom`/`paidTo`. The response adds `meta.period` and an unpaginated `meta.summary` with `successfulAmountPaise` and `successfulPaymentCount`. `includeMember=true` adds a scoped member identity/contact DTO to each row; it never bypasses relationship/trainer authorization. Optional `branchId` uses authorized current-member branch attribution. Existing queries/DTOs remain unchanged when these options are absent.
+
+POST accepts an optional `Idempotency-Key` (8–128 letters, numbers, `_` or `-`). New Flutter installment collection always supplies one. The payment's key/request digests are saved inside the same transaction as its immutable receipt, with a unique actor/gym/key index. Repeating the same normalized payload/key returns the original payment, even after its balance becomes zero or its membership is cancelled. A changed payload returns `409 IDEMPOTENCY_KEY_CONFLICT`; never use a new key to bypass an ambiguous outcome. Independent collections need distinct keys. Existing purchase/onboarding transactions and requests without this header retain their established behavior. Indexes must be created by normal server startup before accepting collection traffic. No legacy record migration is needed.

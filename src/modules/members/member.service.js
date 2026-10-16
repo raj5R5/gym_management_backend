@@ -1,3 +1,4 @@
+const { photoFields } = require('../memberPhotos/photo.dto');
 const { objectId } = require('../gyms/gym.validation');
 const { createMember, onboardMember, updateMember, memberListQuery } = require('./member.validation');
 function fail(code) { const error = new Error('Member operation failed.'); error.code = code; throw error; }
@@ -7,7 +8,7 @@ function parse(schema, value) {
   return result.data;
 }
 function memberDto(member) {
-  return { id: String(member._id), gymId: String(member.gymId), userId: member.userId ? String(member.userId) : undefined,
+  return { ...photoFields(member), id: String(member._id), gymId: String(member.gymId), userId: member.userId ? String(member.userId) : undefined,
     branchId: member.branchId ? String(member.branchId) : undefined, memberCode: member.memberCode,
     firstName: member.firstName, lastName: member.lastName, phone: member.phone,
     dateOfBirth: member.dateOfBirth ? member.dateOfBirth.toISOString().slice(0, 10) : undefined,

@@ -131,7 +131,7 @@ test('admin gets profile counts and zero financial/attendance metrics, without s
   assert.deepEqual(data.members, { total: 2, active: 2, inactive: 0, suspended: 0 });
   assert.deepEqual(data.trainers, { total: 1, active: 1, inactive: 0, suspended: 0 });
   assert.deepEqual(data.subscriptions, { currentlyActive: 0, expiringSoon: 0, expired: 0 });
-  assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: 0, periodSuccessfulCount: 0 });
+  assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: 0, periodSuccessfulCount: 0, outstandingAmountPaise: 0 });
   assert.deepEqual(data.attendance, { periodVisits: 0, periodUniqueMembers: 0, currentlyCheckedIn: 0 });
   assert.equal(response.headers['cache-control'], 'no-store');
   assert.equal(response.body.meta.requestId, response.headers['x-request-id']);
@@ -244,7 +244,7 @@ test('paidAt controls inclusive local boundaries, exact paise and unsuccessful e
   for (const status of ['failed', 'pending', 'cancelled']) await models.Payment.create({ gymId: gymA._id, memberId: memberA._id,
     subscriptionId: sub._id, amountPaise: 999, paymentMethod: 'cash', paidAt: new Date('2026-03-01T00:00Z'), status });
   const data = await dashboard(token, '?from=2026-03-01&to=2026-03-01');
-  assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: 303, periodSuccessfulCount: 2 });
+  assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: 303, periodSuccessfulCount: 2, outstandingAmountPaise: 148485 });
 });
 test('invalid stored financial values and overflowing totals fail closed', async () => {
   const sub = await period('2026-03-01', 30);
@@ -299,6 +299,7 @@ test('foreign and broken member/subscription/plan/branch references are never at
   await historicalVisit(valid, '2026-03-01T01:00Z', { subscriptionId: new mongoose.Types.ObjectId() });
   const data = await fixed('2026-03-10T12:00:00Z', { from: '2026-03-01', branchId: String(branchA._id) });
   assert.equal(data.subscriptions.currentlyActive, 1); assert.equal(data.payments.periodSuccessfulCount, 0); assert.equal(data.attendance.periodVisits, 0);
+  assert.equal(data.payments.outstandingAmountPaise, 150000);
 });
 test('dashboard is read-only, performs fixed aggregation count, and has no dashboard collection', async () => {
   const token = await login(); const snapshot = async () => JSON.stringify(await Promise.all(Object.values(models).map((model) => model.find().sort('_id').lean())));
@@ -311,7 +312,7 @@ test('dashboard is read-only, performs fixed aggregation count, and has no dashb
     const model = models[name]; const original = model.aggregate;
     model.aggregate = function (...args) { aggregations++; return original.apply(this, args); }; restores.push(() => { model.aggregate = original; });
   }
-  try { await dashboard(token); assert.equal(aggregations, 6); assert.equal(await snapshot(), before); }
+  try { await dashboard(token); assert.equal(aggregations, 7); assert.equal(await snapshot(), before); }
   finally { restores.forEach((restore) => restore()); }
   assert.equal(Object.keys(models).some((name) => /dashboard/i.test(name)), false);
 });
@@ -350,4 +351,139 @@ test('midnight DST transition resolves to the first instant of the local day', a
 test('historically skipped calendar day is rejected rather than querying another day', async () => {
   await models.Gym.updateOne({ _id: gymA._id }, { 'settings.timezone': 'Pacific/Apia' });
   error(await send('get', dashboardPath() + '?from=2011-12-30', await login()), 400, 'VALIDATION_ERROR');
+});
+
+// Outstanding balance is a stock metric, distinct from period revenue.
+test('dashboard shows saved plan price less partial payment separately from revenue', async () => {
+  const token = await login(); const sub = await create(token);
+  await payment(token, sub, 100000);
+  const data = await dashboard(token);
+  assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: 100000, periodSuccessfulCount: 1, outstandingAmountPaise: 50000 });
+  const history = await send('get', `/api/v1/gyms/${gymA._id}/members/${memberA._id}/memberships/${sub.id}`, token);
+  assert.equal(history.status, 200);
+  assert.equal(history.body.data.paymentSummary.remainingBalancePaise, data.payments.outstandingAmountPaise);
+});
+test('multiple members, installments and renewal periods do not multiply outstanding dues', async () => {
+  const token = await login();
+  const first = await period('2026-01-01', 30);
+  const renewal = await period('2026-02-01', 30, { previousSubscriptionId: first._id });
+  const other = await period('2026-01-01', 30, { memberId: memberOther._id });
+  await payment(token, { id: String(first._id), memberId: String(first.memberId) }, 30001);
+  await payment(token, { id: String(first._id), memberId: String(first.memberId) }, 69999);
+  await payment(token, { id: String(renewal._id), memberId: String(renewal.memberId) }, 150000);
+  await payment(token, { id: String(other._id), memberId: String(other.memberId) }, 40003);
+  assert.equal((await dashboard(token)).payments.outstandingAmountPaise, 159997);
+});
+test('dues include unpaid expired and future subscriptions but exclude cancelled and free plans', async () => {
+  const token = await login();
+  await period('2020-01-01', 30);
+  await period('2090-01-01', 30, { memberId: memberOther._id });
+  await period('2020-02-01', 30, { status: 'cancelled' });
+  await period('2020-03-01', 30, { pricePaiseSnapshot: 0 });
+  await models.MemberProfile.updateOne({ _id: memberA._id }, { status: 'inactive' });
+  await models.MembershipPlan.updateOne({ _id: planA._id }, { price: 999999 });
+  assert.equal((await dashboard(token)).payments.outstandingAmountPaise, 300000);
+});
+test('dues use all successful payments regardless of selected period and ignore unsuccessful payments', async () => {
+  const token = await login(); const sub = await period('2026-01-01', 30);
+  await payment(token, { id: String(sub._id), memberId: String(sub.memberId) }, 100000, { paidAt: '2026-01-02T00:00:00Z' });
+  for (const status of ['pending', 'failed', 'cancelled']) await models.Payment.create({ gymId: gymA._id, memberId: memberA._id,
+    subscriptionId: sub._id, amountPaise: 50000, paymentMethod: 'cash', paidAt: new Date('2026-03-01T00:00:00Z'), status });
+  const data = await dashboard(token, '?from=2026-03-01');
+  assert.equal(data.payments.periodSuccessfulAmountPaise, 0);
+  assert.equal(data.payments.outstandingAmountPaise, 50000);
+});
+test('outstanding dues respect gym and current-member branch isolation', async () => {
+  const token = await login();
+  await period('2020-01-01', 30);
+  await period('2020-01-01', 30, { memberId: memberOther._id });
+  await period('2020-01-01', 30, { gymId: gymB._id, memberId: memberB._id, membershipPlanId: planB._id });
+  await models.MemberProfile.updateOne({ _id: memberOther._id }, { branchId: branchOther._id });
+  assert.equal((await dashboard(token)).payments.outstandingAmountPaise, 300000);
+  assert.equal((await dashboard(token, `?branchId=${branchA._id}`)).payments.outstandingAmountPaise, 150000);
+  assert.equal((await dashboard(token, `?branchId=${branchOther._id}`)).payments.outstandingAmountPaise, 150000);
+});
+test('payments with foreign gym or wrong member cannot reduce another subscription balance', async () => {
+  const token = await login(); const sub = await period('2020-01-01', 30);
+  for (const values of [{ gymId: gymB._id, memberId: memberA._id }, { gymId: gymA._id, memberId: memberOther._id }]) {
+    await models.Payment.create({ ...values, subscriptionId: sub._id, amountPaise: 50000,
+      paymentMethod: 'cash', paidAt: new Date('2020-01-02T00:00:00Z') });
+  }
+  assert.equal((await dashboard(token)).payments.outstandingAmountPaise, 150000);
+});
+for (const badPrice of [-1, 1.5, 1000000001, 'invalid']) test(`invalid subscription price ${badPrice} fails closed for dues`, async () => {
+  const sub = await period('2020-01-01', 30);
+  await models.MemberSubscription.collection.updateOne({ _id: sub._id }, { $set: { pricePaiseSnapshot: badPrice } });
+  error(await send('get', dashboardPath(), await login()), 500, 'INTERNAL_SERVER_ERROR');
+});
+test('invalid historical payment outside revenue period still fails dues closed', async () => {
+  const sub = await period('2020-01-01', 30);
+  const paid = await models.Payment.create({ gymId: gymA._id, memberId: memberA._id, subscriptionId: sub._id,
+    amountPaise: 100, paymentMethod: 'cash', paidAt: new Date('2020-01-02T00:00:00Z') });
+  await models.Payment.collection.updateOne({ _id: paid._id }, { $set: { amountPaise: 1.5 } });
+  error(await send('get', dashboardPath(), await login()), 500, 'INTERNAL_SERVER_ERROR');
+});
+test('overpayment on one subscription cannot offset another unpaid balance', async () => {
+  const sub = await period('2020-01-01', 30); await period('2020-01-01', 30, { memberId: memberOther._id });
+  await models.Payment.create({ gymId: gymA._id, memberId: memberA._id, subscriptionId: sub._id,
+    amountPaise: 150001, paymentMethod: 'cash', paidAt: new Date('2020-01-02T00:00:00Z') });
+  error(await send('get', dashboardPath(), await login()), 500, 'INTERNAL_SERVER_ERROR');
+});
+
+test('unsafe outstanding totals fail checked integer conversion', async () => {
+  const token = await login(); const original = models.MemberSubscription.aggregate;
+  models.MemberSubscription.aggregate = function (pipeline) {
+    if (pipeline.some((stage) => stage.$lookup?.from === models.Payment.collection.name)) {
+      return Promise.resolve([{ amount: mongoose.Types.Decimal128.fromString('9007199254740992'), invalid: 0 }]);
+    }
+    return original.call(this, pipeline);
+  };
+  try { error(await send('get', dashboardPath(), token), 500, 'INTERNAL_SERVER_ERROR'); }
+  finally { models.MemberSubscription.aggregate = original; }
+});
+
+// Quick periods are resolved by the same gym-local calendar as default today.
+for (const example of [
+  { zone: 'Asia/Kolkata', now: '2026-10-11T20:00:00Z', preset: 'last7Days', from: '2026-10-06', to: '2026-10-12', start: '2026-10-05T18:30:00.000Z', end: '2026-10-12T18:30:00.000Z' },
+  { zone: 'UTC', now: '2026-01-03T12:00:00Z', preset: 'last7Days', from: '2025-12-28', to: '2026-01-03', start: '2025-12-28T00:00:00.000Z', end: '2026-01-04T00:00:00.000Z' },
+  { zone: 'America/New_York', now: '2026-03-09T01:00:00Z', preset: 'last7Days', from: '2026-03-02', to: '2026-03-08', start: '2026-03-02T05:00:00.000Z', end: '2026-03-09T04:00:00.000Z' },
+  { zone: 'Asia/Kolkata', now: '2024-02-28T20:00:00Z', preset: 'thisMonth', from: '2024-02-01', to: '2024-02-29', start: '2024-01-31T18:30:00.000Z', end: '2024-02-29T18:30:00.000Z' },
+  { zone: 'America/New_York', now: '2026-03-15T12:00:00Z', preset: 'thisMonth', from: '2026-03-01', to: '2026-03-31', start: '2026-03-01T05:00:00.000Z', end: '2026-04-01T04:00:00.000Z' },
+]) test(`quick ${example.preset}: ${example.zone} ${example.from}`, async () => {
+  await models.Gym.updateOne({ _id: gymA._id }, { 'settings.timezone': example.zone });
+  const data = await fixed(example.now, { preset: example.preset });
+  assert.deepEqual(data.period, { timezone: example.zone, from: example.from, to: example.to,
+    startUtc: example.start, endUtc: example.end, branchId: null });
+});
+
+test('quick presets pass through HTTP validation and retain branch authorization', async () => {
+  const token = await login();
+  for (const preset of ['last7Days', 'thisMonth']) {
+    const data = await dashboard(token, `?preset=${preset}&branchId=${branchA._id}`);
+    assert.equal(data.period.branchId, String(branchA._id));
+    error(await send('get', dashboardPath(gymB) + `?preset=${preset}`, token), 403, 'FORBIDDEN');
+    error(await send('get', dashboardPath() + `?preset=${preset}&branchId=${branchB._id}`, token), 404, 'BRANCH_NOT_FOUND');
+    error(await send('get', dashboardPath() + `?preset=${preset}`, await login(trainer)), 403, 'FORBIDDEN');
+  }
+});
+test('unknown presets and presets combined with explicit dates rejected', async () => {
+  const token = await login();
+  for (const query of ['?preset=allTime', '?preset=last7Days&from=2026-10-10', '?preset=thisMonth&to=2026-10-12', '?preset=a&preset=b']) {
+    error(await send('get', dashboardPath() + query, token), 400, 'VALIDATION_ERROR');
+  }
+});
+test('today zero and historical two-payment revenue leave the same outstanding balance', async () => {
+  await models.Gym.updateOne({ _id: gymA._id }, { 'settings.timezone': 'Asia/Kolkata' });
+  const sub = await period('2026-10-01', 30, { pricePaiseSnapshot: 350000 });
+  for (const at of ['2026-10-09T18:30:00.000Z', '2026-10-10T18:29:59.999Z']) {
+    await models.Payment.create({ gymId: gymA._id, memberId: memberA._id, subscriptionId: sub._id,
+      amountPaise: 150000, paymentMethod: 'cash', paidAt: new Date(at), status: 'succeeded' });
+  }
+  for (const [query, expectedRevenue, expectedCount] of [
+    [{}, 0, 0], [{ from: '2026-10-10', to: '2026-10-10' }, 300000, 2],
+    [{ preset: 'last7Days' }, 300000, 2], [{ preset: 'thisMonth' }, 300000, 2],
+  ]) {
+    const data = await fixed('2026-10-12T12:00:00Z', query);
+    assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: expectedRevenue, periodSuccessfulCount: expectedCount, outstandingAmountPaise: 50000 });
+  }
 });
