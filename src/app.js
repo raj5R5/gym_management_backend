@@ -194,6 +194,19 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       createAuthorizationMiddleware(authorizationService)));
     mountRouter('/api/v1/gyms/:gymId/member-onboarding', createMemberOnboardingRouter(memberService, authService,
       createAuthorizationMiddleware(authorizationService)));
+    const subscriptionService = createSubscriptionService({ MemberSubscription: getMemberSubscriptionModel(database.connection),
+      MemberProfile: getMemberProfileModel(database.connection), MembershipPlan: getMembershipPlanModel(database.connection),
+      TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
+      authorizationService });
+    const paymentService = createPaymentService({ Gym: getGymModel(database.connection), Payment: getPaymentModel(database.connection),
+      MemberSubscription: getMemberSubscriptionModel(database.connection), MemberProfile: getMemberProfileModel(database.connection),
+      TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
+      authorizationService });
+    const membershipManagementService = createMembershipManagementService({ summaryService, subscriptionService, paymentService });
+    mountRouter('/api/v1/gyms/:gymId/members/:memberId/memberships', createMembershipManagementRouter(membershipManagementService, authService,
+      createAuthorizationMiddleware(authorizationService)));
+    // Specific member routes must reach their own guards before the general
+    // Members router, whose router-wide middleware also runs on unmatched paths.
     mountRouter('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const trainerService = createTrainerService({ TrainerProfile: getTrainerProfileModel(database.connection),
@@ -213,14 +226,6 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
     const planService = createPlanService({ MembershipPlan: getMembershipPlanModel(database.connection), authorizationService });
     mountRouter('/api/v1/gyms/:gymId/membership-plans', createPlanRouter(planService, authService,
       createAuthorizationMiddleware(authorizationService)));
-    const subscriptionService = createSubscriptionService({ MemberSubscription: getMemberSubscriptionModel(database.connection),
-      MemberProfile: getMemberProfileModel(database.connection), MembershipPlan: getMembershipPlanModel(database.connection),
-      TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
-      authorizationService });
-    const paymentService = createPaymentService({ Gym: getGymModel(database.connection), Payment: getPaymentModel(database.connection),
-      MemberSubscription: getMemberSubscriptionModel(database.connection), MemberProfile: getMemberProfileModel(database.connection),
-      TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
-      authorizationService });
     const renewalService = createRenewalService({ RenewalOperation: getRenewalOperationModel(database.connection),
       subscriptionService, paymentService, authorizationService });
     mountRouter('/api/v1/gyms/:gymId/subscriptions', createSubscriptionRouter(subscriptionService, authService,
@@ -236,9 +241,6 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
     const memberMembershipService = createMemberMembershipService({ MemberSubscription: getMemberSubscriptionModel(database.connection),
       subscriptionService, paymentService, authorizationService });
     mountRouter('/api/v1/gyms/:gymId/member-memberships', createMemberMembershipRouter(memberMembershipService, authService,
-      createAuthorizationMiddleware(authorizationService)));
-    const membershipManagementService = createMembershipManagementService({ summaryService, subscriptionService, paymentService });
-    mountRouter('/api/v1/gyms/:gymId/members/:memberId/memberships', createMembershipManagementRouter(membershipManagementService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const attendanceService = createAttendanceService({ Gym: getGymModel(database.connection), Attendance: getAttendanceModel(database.connection),
       MemberProfile: getMemberProfileModel(database.connection), Branch: getBranchModel(database.connection),

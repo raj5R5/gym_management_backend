@@ -105,6 +105,35 @@ test('empty history has null current membership and zero pagination', async () =
   const result = await list(await login()); assert.equal(result.data.currentMembership, null); assert.deepEqual(result.data.subscriptions, []);
   assert.deepEqual(result.meta.pagination, { page: 1, limit: 20, total: 0 });
 });
+test('dedicated membership routes authenticate once and retain service-level gym checks', async (t) => {
+  const token = await login();
+  const subscription = await create(token);
+  const sessions = t.mock.method(models.AuthSession, 'findOne');
+  const accounts = t.mock.method(models.UserAccount, 'findById');
+  const grants = t.mock.method(models.GymAccess, 'findOne');
+  for (const [url, expectedGrants] of [[path(), 3], [itemPath(subscription), 4]]) {
+    sessions.mock.resetCalls(); accounts.mock.resetCalls(); grants.mock.resetCalls();
+    assert.equal((await send('get', url, token)).status, 200);
+    assert.equal(sessions.mock.callCount(), 1);
+    assert.equal(accounts.mock.callCount(), 1);
+    // Dedicated router, member/subscription service, and payment service all
+    // independently enforce their existing persisted gym-access checks.
+    assert.equal(grants.mock.callCount(), expectedGrants);
+  }
+});
+test('membership route precedence preserves account, session and tenant denials', async () => {
+  const token = await login();
+  await create(token);
+  assert.equal((await send('get', path(), token)).status, 200);
+  error(await send('get', path()), 401, 'INVALID_AUTHENTICATION');
+  error(await send('get', path(memberB, gymB), token), 403, 'FORBIDDEN');
+  error(await send('get', path(memberB), token), 404, 'MEMBER_NOT_FOUND');
+  await models.AuthSession.updateMany({ userId: admin._id }, { status: 'revoked' });
+  error(await send('get', path(), token), 401, 'INVALID_AUTHENTICATION');
+  const replacement = await login();
+  await models.UserAccount.updateOne({ _id: admin._id }, { status: 'suspended' });
+  error(await send('get', path(), replacement), 401, 'INVALID_AUTHENTICATION');
+});
 test('admin sees current period and exact partial-payment totals without sensitive fields', async () => {
   const token = await login(); const subscription = await create(token); await payment(token, subscription, 101); await payment(token, subscription, 202);
   const response = await list(token); assert.equal(response.data.currentMembership.id, subscription.id);
