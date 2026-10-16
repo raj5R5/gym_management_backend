@@ -56,7 +56,7 @@ const { createOwnerRegistrationService } = require('./modules/ownerRegistration/
 const { createOwnerRegistrationRouter } = require('./modules/ownerRegistration/registration.routes');
 const helmet = require('helmet');
 const cors = require('cors');
-const pinoHttp = require('pino-http');
+const { createRequestLogger, routeTemplatePrefix } = require('./middleware/requestLogger');
 const { rateLimit } = require('express-rate-limit');
 const { createLogger } = require('./config/logger');
 const requestId = require('./middleware/requestId');
@@ -77,6 +77,7 @@ const { createGymAccessRouter } = require('./modules/gymAccess/gymAccess.routes'
 
 function buildApp({ config, logger = createLogger(config), database, photoStorage, bootstrap = false } = {}) {
   const app = express();
+  const mountRouter = (path, ...handlers) => app.use(path, routeTemplatePrefix(path), ...handlers);
   app.disable('x-powered-by');
   // No proxy is trusted until the deployment topology is explicitly configured.
   app.set('trust proxy', false);
@@ -85,17 +86,7 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
   app.locals.ready = true;
 
   app.use(requestId);
-  app.use(pinoHttp({
-    logger,
-    genReqId: (req) => req.id,
-    customProps: (req) => ({ requestId: req.id }),
-    serializers: {
-      // Deliberately omit headers, query strings, bodies, and client addresses.
-      req: (req) => ({ id: req.id, method: req.method }),
-      res: (res) => ({ statusCode: res.statusCode }),
-      err: (error) => ({ type: error.name, code: error.code, status: error.status }),
-    },
-  }));
+  app.use(createRequestLogger(logger));
   app.use(helmet());
   app.use(cors({
     origin(origin, callback) {
@@ -159,24 +150,24 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       AuthSession: getAuthSessionModel(database.connection),
       RefreshTokenRecord: getRefreshTokenModel(database.connection), config, logger,
     });
-    app.use('/api/v1/auth', createAuthRouter(authService, config));
+    mountRouter('/api/v1/auth', createAuthRouter(authService, config));
     const ownerRegistrationService = createOwnerRegistrationService({
       UserAccount: getUserAccountModel(database.connection), Gym: getGymModel(database.connection),
       GymAccess: getGymAccessModel(database.connection),
     });
-    app.use('/api/v1/auth', createOwnerRegistrationRouter(ownerRegistrationService));
+    mountRouter('/api/v1/auth', createOwnerRegistrationRouter(ownerRegistrationService));
     const authorizationService = createAuthorizationService({
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
       Branch: getBranchModel(database.connection),
     });
     const staffService = createStaffService({ UserAccount: getUserAccountModel(database.connection),
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection), authorizationService, logger });
-    app.use('/api/v1/gyms/:gymId/staff', createStaffRouter(staffService, authService, createAuthorizationMiddleware(authorizationService)));
+    mountRouter('/api/v1/gyms/:gymId/staff', createStaffRouter(staffService, authService, createAuthorizationMiddleware(authorizationService)));
     const dashboardService = createDashboardService({ Gym: getGymModel(database.connection), Branch: getBranchModel(database.connection),
       MemberProfile: getMemberProfileModel(database.connection), TrainerProfile: getTrainerProfileModel(database.connection),
       MembershipPlan: getMembershipPlanModel(database.connection), MemberSubscription: getMemberSubscriptionModel(database.connection),
       Payment: getPaymentModel(database.connection), Attendance: getAttendanceModel(database.connection), authorizationService });
-    app.use('/api/v1/gyms/:gymId/dashboard', createDashboardRouter(dashboardService, authService,
+    mountRouter('/api/v1/gyms/:gymId/dashboard', createDashboardRouter(dashboardService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const summaryService = createMemberSummaryService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), TrainerProfile: getTrainerProfileModel(database.connection),
@@ -184,30 +175,30 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       MembershipPlan: getMembershipPlanModel(database.connection), Payment: getPaymentModel(database.connection),
       Attendance: getAttendanceModel(database.connection), authorizationService,
       resolveSelfMember: createSelfMemberResolver({ MemberProfile: getMemberProfileModel(database.connection), authorizationService }) });
-    app.use('/api/v1/me/gyms/:gymId', createMemberSelfRouter(createMemberSelfService({ summaryService }), authService,
+    mountRouter('/api/v1/me/gyms/:gymId', createMemberSelfRouter(createMemberSelfService({ summaryService }), authService,
       createAuthorizationMiddleware(authorizationService)));
-    app.use('/api/v1/gyms/:gymId/members', createMemberSummaryRouter(summaryService, authService,
+    mountRouter('/api/v1/gyms/:gymId/members', createMemberSummaryRouter(summaryService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const memberService = createMemberService({ MemberProfile: getMemberProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
     const memberPhotoService = createPhotoService({ MemberProfile: getMemberProfileModel(database.connection),
       ...photoModels(database.connection), authorizationService, storage: photoStorage ?? createPhotoStorage(config), logger });
     app.locals.memberPhotoService = memberPhotoService;
-    app.use('/api/v1/gyms/:gymId/members/:memberId/photo', createPhotoRouter(memberPhotoService, authService,
+    mountRouter('/api/v1/gyms/:gymId/members/:memberId/photo', createPhotoRouter(memberPhotoService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const memberAccountService = createMemberAccountService({ MemberProfile: getMemberProfileModel(database.connection),
       UserAccount: getUserAccountModel(database.connection), GymAccess: getGymAccessModel(database.connection),
       Gym: getGymModel(database.connection), MemberActivation: getMemberActivationModel(database.connection), authorizationService, logger });
-    app.use('/api/v1/account', createAccountActivationRouter(memberAccountService));
-    app.use('/api/v1/gyms/:gymId/members/:memberId/account', createMemberAccountRouter(memberAccountService, authService,
+    mountRouter('/api/v1/account', createAccountActivationRouter(memberAccountService));
+    mountRouter('/api/v1/gyms/:gymId/members/:memberId/account', createMemberAccountRouter(memberAccountService, authService,
       createAuthorizationMiddleware(authorizationService)));
-    app.use('/api/v1/gyms/:gymId/member-onboarding', createMemberOnboardingRouter(memberService, authService,
+    mountRouter('/api/v1/gyms/:gymId/member-onboarding', createMemberOnboardingRouter(memberService, authService,
       createAuthorizationMiddleware(authorizationService)));
-    app.use('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,
+    mountRouter('/api/v1/gyms/:gymId/members', createMemberRouter(memberService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const trainerService = createTrainerService({ TrainerProfile: getTrainerProfileModel(database.connection),
       Branch: getBranchModel(database.connection), UserAccount: getUserAccountModel(database.connection), authorizationService });
-    app.use('/api/v1/gyms/:gymId/trainers', createTrainerRouter(trainerService, authService,
+    mountRouter('/api/v1/gyms/:gymId/trainers', createTrainerRouter(trainerService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const assignmentService = createAssignmentService({
       TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
@@ -215,12 +206,12 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       Branch: getBranchModel(database.connection),
       authorizationService,
     });
-    app.use('/api/v1/gyms/:gymId/trainer-assignments', createAssignmentRouter(assignmentService, authService,
+    mountRouter('/api/v1/gyms/:gymId/trainer-assignments', createAssignmentRouter(assignmentService, authService,
       createAuthorizationMiddleware(authorizationService)));
-    app.use('/api/v1/gyms/:gymId', createAssignmentViewsRouter(assignmentService, authService,
+    mountRouter('/api/v1/gyms/:gymId', createAssignmentViewsRouter(assignmentService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const planService = createPlanService({ MembershipPlan: getMembershipPlanModel(database.connection), authorizationService });
-    app.use('/api/v1/gyms/:gymId/membership-plans', createPlanRouter(planService, authService,
+    mountRouter('/api/v1/gyms/:gymId/membership-plans', createPlanRouter(planService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const subscriptionService = createSubscriptionService({ MemberSubscription: getMemberSubscriptionModel(database.connection),
       MemberProfile: getMemberProfileModel(database.connection), MembershipPlan: getMembershipPlanModel(database.connection),
@@ -232,29 +223,29 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       authorizationService });
     const renewalService = createRenewalService({ RenewalOperation: getRenewalOperationModel(database.connection),
       subscriptionService, paymentService, authorizationService });
-    app.use('/api/v1/gyms/:gymId/subscriptions', createSubscriptionRouter(subscriptionService, authService,
+    mountRouter('/api/v1/gyms/:gymId/subscriptions', createSubscriptionRouter(subscriptionService, authService,
       createAuthorizationMiddleware(authorizationService), renewalService));
-    app.use('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
+    mountRouter('/api/v1/gyms/:gymId/payments', createPaymentRouter(paymentService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const completeOnboardingService = createCompleteOnboardingService({
       MemberOnboardingOperation: getMemberOnboardingOperationModel(database.connection),
       Gym: getGymModel(database.connection), GymAccess: getGymAccessModel(database.connection),
       UserAccount: getUserAccountModel(database.connection), memberService, subscriptionService, paymentService, authorizationService });
-    app.use('/api/v1/gyms/:gymId/member-onboarding', createCompleteOnboardingRouter(completeOnboardingService, authService,
+    mountRouter('/api/v1/gyms/:gymId/member-onboarding', createCompleteOnboardingRouter(completeOnboardingService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const memberMembershipService = createMemberMembershipService({ MemberSubscription: getMemberSubscriptionModel(database.connection),
       subscriptionService, paymentService, authorizationService });
-    app.use('/api/v1/gyms/:gymId/member-memberships', createMemberMembershipRouter(memberMembershipService, authService,
+    mountRouter('/api/v1/gyms/:gymId/member-memberships', createMemberMembershipRouter(memberMembershipService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const membershipManagementService = createMembershipManagementService({ summaryService, subscriptionService, paymentService });
-    app.use('/api/v1/gyms/:gymId/members/:memberId/memberships', createMembershipManagementRouter(membershipManagementService, authService,
+    mountRouter('/api/v1/gyms/:gymId/members/:memberId/memberships', createMembershipManagementRouter(membershipManagementService, authService,
       createAuthorizationMiddleware(authorizationService)));
     const attendanceService = createAttendanceService({ Gym: getGymModel(database.connection), Attendance: getAttendanceModel(database.connection),
       MemberProfile: getMemberProfileModel(database.connection), Branch: getBranchModel(database.connection),
       MemberSubscription: getMemberSubscriptionModel(database.connection), MembershipPlan: getMembershipPlanModel(database.connection),
       TrainerProfile: getTrainerProfileModel(database.connection), TrainerMemberAssignment: getTrainerMemberAssignmentModel(database.connection),
       authorizationService });
-    app.use('/api/v1/gyms/:gymId/attendance', createAttendanceRouter(attendanceService, authService,
+    mountRouter('/api/v1/gyms/:gymId/attendance', createAttendanceRouter(attendanceService, authService,
       createAuthorizationMiddleware(authorizationService)));
   }
 
@@ -266,9 +257,9 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
     const userService = createUserAccountService(getUserAccountModel(database.connection));
     const accessService = createGymAccessService(getGymAccessModel(database.connection), gymService, userService);
     logger.warn('Unauthenticated bootstrap routes enabled; local development only');
-    app.use('/api/v1/user-accounts', bootstrapOnly, createUserAccountRouter(userService, authService, config));
-    app.use('/api/v1/gyms/:gymId/access', bootstrapOnly, createGymAccessRouter(accessService));
-    app.use('/api/v1/gyms', bootstrapOnly, createGymRouter(gymService, branchService));
+    mountRouter('/api/v1/user-accounts', bootstrapOnly, createUserAccountRouter(userService, authService, config));
+    mountRouter('/api/v1/gyms/:gymId/access', bootstrapOnly, createGymAccessRouter(accessService));
+    mountRouter('/api/v1/gyms', bootstrapOnly, createGymRouter(gymService, branchService));
   }
 
   app.use(notFound);

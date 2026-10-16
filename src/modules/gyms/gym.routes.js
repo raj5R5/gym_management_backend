@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const { routeTemplatePrefix } = require('../../middleware/requestLogger');
 const validate = require('../../middleware/validate');
 const schemas = require('./gym.validation');
 const { createGymController } = require('./gym.controller');
@@ -12,7 +13,7 @@ function createGymRouter(gymService, branchService) {
   router.get('/', validate({ query: schemas.listQuery }), controller.list);
   router.get('/:gymId', validate({ params: schemas.gymParams }), controller.get);
   router.patch('/:gymId', validate({ params: schemas.gymParams, body: schemas.updateGym }), controller.update);
-  router.use('/:gymId/branches', createBranchRouter(branchService));
+  router.use('/:gymId/branches', routeTemplatePrefix('/api/v1/gyms/:gymId/branches'), createBranchRouter(branchService));
   return router;
 }
 
