@@ -1,4 +1,7 @@
 const publicErrors = {
+  PROFILE_PASSWORD_REQUIRED: [400, 'Enter your current password to change the sign-in email.'],
+  PROFILE_PASSWORD_INVALID: [400, 'The current password is incorrect. No profile changes were saved.'],
+  PROFILE_CHANGED: [409, 'Your account changed. Reload the profile before saving again.'],
   PHOTO_STORAGE_UNAVAILABLE: [503, 'Photo storage is unavailable. Retry later; the existing photo is unchanged.'],
   PHOTO_DATABASE_UNAVAILABLE: [503, 'The photo update could not be confirmed. Retry the same saved operation.'],
   PHOTO_INVALID_IMAGE: [400, 'Choose a valid JPEG, PNG or WebP image of at most 20 megapixels.'],

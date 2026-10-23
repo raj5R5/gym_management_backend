@@ -7,9 +7,9 @@ function createLogger(config, destination) {
     redact: {
       paths: [
         'req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]',
-        'authorization', 'cookie', 'password', 'passwordHash', 'token',
+        'authorization', 'cookie', 'password', 'currentPassword', 'passwordHash', 'token',
         'accessToken', 'refreshToken', 'credentials', 'secret', 'mongoUri', 'MONGO_URI', 'uri',
-        '*.authorization', '*.cookie', '*.password', '*.passwordHash', '*.token',
+        '*.authorization', '*.cookie', '*.password', '*.currentPassword', '*.passwordHash', '*.token',
         '*.accessToken', '*.refreshToken', '*.credentials', '*.secret',
         '*.mongoUri', '*.MONGO_URI', '*.uri',
         'jwtAccessSecret', 'JWT_ACCESS_SECRET', '*.jwtAccessSecret', '*.JWT_ACCESS_SECRET',

@@ -1,12 +1,15 @@
 const cloudinary = require('cloudinary').v2;
 const { MAX_PHOTO_BYTES, fail } = require('./photo.image');
-function createPhotoStorage(config) {
+function createPhotoStorage(config, subject = 'member') {
+  if (!['member', 'owner'].includes(subject)) throw new TypeError('Unsupported photo subject.');
   const credentials = config.cloudinary;
   const configured = Boolean(credentials?.cloudName && credentials?.apiKey && credentials?.apiSecret);
   const options = { cloud_name: credentials?.cloudName, api_key: credentials?.apiKey,
     api_secret: credentials?.apiSecret, secure: true, timeout: 60_000 };
   const guard = () => { if (!configured) fail('PHOTO_STORAGE_UNAVAILABLE'); };
-  const validId = (id) => /^gym_members\/[a-f0-9]{24}\/[a-f0-9]{24}\/[a-f0-9-]{36}$/.test(id);
+  const validId = (id) => (subject === 'member'
+    ? /^gym_members\/[a-f0-9]{24}\/[a-f0-9]{24}\/[a-f0-9-]{36}$/
+    : /^gym_owners\/[a-f0-9]{24}\/[a-f0-9]{24}\/[a-f0-9-]{36}$/).test(id);
   return {
     configured,
     async upload(bytes, publicId) {

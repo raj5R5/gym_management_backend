@@ -39,3 +39,16 @@ test('asset deletion uses authenticated namespace and permits already deleted as
   });
   await createPhotoStorage(config).destroy(publicId);
 });
+test('owner storage accepts only the owner namespace without widening member storage', async (t) => {
+  const ownerId = publicId.replace('gym_members/', 'gym_owners/');
+  const upload = t.mock.method(cloudinary.uploader, 'upload_stream', (options, callback) => {
+    assert.equal(options.public_id, ownerId); assert.equal(options.type, 'authenticated');
+    return { end() { callback(null, { ...value, public_id: ownerId }); } };
+  });
+  await assert.rejects(createPhotoStorage(config).upload(Buffer.from('image'), ownerId), { code: 'PHOTO_INVALID_IMAGE' });
+  await assert.rejects(createPhotoStorage(config, 'owner').upload(Buffer.from('image'), publicId), { code: 'PHOTO_INVALID_IMAGE' });
+  assert.equal(upload.mock.callCount(), 0);
+  assert.equal((await createPhotoStorage(config, 'owner').upload(Buffer.from('image'), ownerId)).publicId, ownerId);
+  assert.equal(upload.mock.callCount(), 1);
+  assert.throws(() => createPhotoStorage(config, 'arbitrary'), TypeError);
+});

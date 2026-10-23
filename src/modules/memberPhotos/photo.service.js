@@ -7,8 +7,9 @@ const digestOf = (value) => createHash('sha256').update(value).digest('hex');
 const leaseMs = 5 * 60_000;
 const retentionMs = 24 * 60 * 60_000;
 function createPhotoService({ MemberProfile, PhotoOperation, PhotoCleanup, authorizationService,
-  storage, logger, now = () => new Date() }) {
+  storage, logger, now = () => new Date(), accessOverride, resultOverride, publicIdPrefix = 'gym_members' }) {
   async function access(auth, authorization, memberId, write = false) {
+    if (accessOverride) return accessOverride(auth, authorization, memberId, write);
     const allowed = write ? ['admin'] : ['admin', 'trainer'];
     authorizationService.requireRoles(auth, authorization, allowed, authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
@@ -18,7 +19,7 @@ function createPhotoService({ MemberProfile, PhotoOperation, PhotoCleanup, autho
     if (!member) fail('MEMBER_NOT_FOUND');
     return member;
   }
-  const result = (member) => ({ memberId: String(member._id), ...photoFields(member), photoRevision: member.photoRevision ?? 0 });
+  const result = resultOverride ?? ((member) => ({ memberId: String(member._id), ...photoFields(member), photoRevision: member.photoRevision ?? 0 }));
   async function enqueue(publicId, gymId, session, after = now()) {
     if (!publicId) return;
     await PhotoCleanup.updateOne({ _id: digestOf(publicId) }, { $setOnInsert: { publicId, gymId, after } },
@@ -37,7 +38,7 @@ function createPhotoService({ MemberProfile, PhotoOperation, PhotoCleanup, autho
       try {
         operation = (await PhotoOperation.create({ _id: id, gymId: member.gymId, memberId,
           actorId: auth.user._id, kind, digest, baseRevision: member.photoRevision ?? 0, state: 'prepared',
-          ...(kind === 'upload' ? { publicId: `gym_members/${member.gymId}/${memberId}/${operationKey}` } : {}) })).toObject();
+          ...(kind === 'upload' ? { publicId: `${publicIdPrefix}/${member.gymId}/${memberId}/${operationKey}` } : {}) })).toObject();
       } catch (error) {
         if (error.code !== 11000) throw error;
         operation = await PhotoOperation.findById(id).lean();

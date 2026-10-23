@@ -22,12 +22,13 @@ const cleanupSchema = new Schema({
 }, { ...options, timestamps: true });
 cleanupSchema.index({ after: 1 }, { name: 'member_photo_cleanup_due' });
 operationSchema.index({ state: 1, leaseUntil: 1 }, { name: 'member_photo_operation_recovery' });
-function photoModels(connection) {
+function photoModels(connection, subject = 'Member') {
+  if (!['Member', 'Owner'].includes(subject)) throw new TypeError('Unsupported photo subject.');
   return {
-    PhotoOperation: connection.models.MemberPhotoOperation
-      || connection.model('MemberPhotoOperation', operationSchema),
-    PhotoCleanup: connection.models.MemberPhotoCleanup
-      || connection.model('MemberPhotoCleanup', cleanupSchema),
+    PhotoOperation: connection.models[`${subject}PhotoOperation`]
+      || connection.model(`${subject}PhotoOperation`, operationSchema),
+    PhotoCleanup: connection.models[`${subject}PhotoCleanup`]
+      || connection.model(`${subject}PhotoCleanup`, cleanupSchema),
   };
 }
 module.exports = { photoModels };

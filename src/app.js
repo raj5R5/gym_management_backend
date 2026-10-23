@@ -1,3 +1,6 @@
+const { getOwnerProfileModel } = require('./modules/ownerProfile/profile.model');
+const { createOwnerProfileService } = require('./modules/ownerProfile/profile.service');
+const { createOwnerProfileRouter } = require('./modules/ownerProfile/profile.routes');
 const { photoModels } = require('./modules/memberPhotos/photo.model');
 const { createPhotoService } = require('./modules/memberPhotos/photo.service');
 const { createPhotoStorage } = require('./modules/memberPhotos/photo.storage');
@@ -75,7 +78,7 @@ const { getGymAccessModel } = require('./modules/gymAccess/gymAccess.model');
 const { createGymAccessService } = require('./modules/gymAccess/gymAccess.service');
 const { createGymAccessRouter } = require('./modules/gymAccess/gymAccess.routes');
 
-function buildApp({ config, logger = createLogger(config), database, photoStorage, bootstrap = false } = {}) {
+function buildApp({ config, logger = createLogger(config), database, photoStorage, ownerPhotoStorage, bootstrap = false } = {}) {
   const app = express();
   const mountRouter = (path, ...handlers) => app.use(path, routeTemplatePrefix(path), ...handlers);
   app.disable('x-powered-by');
@@ -160,6 +163,12 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection),
       Branch: getBranchModel(database.connection),
     });
+    const ownerProfileService = createOwnerProfileService({ OwnerProfile: getOwnerProfileModel(database.connection),
+      UserAccount: getUserAccountModel(database.connection), Gym: getGymModel(database.connection),
+      authorizationService, storage: ownerPhotoStorage ?? createPhotoStorage(config, 'owner'), logger });
+    app.locals.ownerPhotoService = ownerProfileService.photos;
+    mountRouter('/api/v1/gyms/:gymId/owner-profile', createOwnerProfileRouter(ownerProfileService, authService,
+      createAuthorizationMiddleware(authorizationService)));
     const staffService = createStaffService({ UserAccount: getUserAccountModel(database.connection),
       GymAccess: getGymAccessModel(database.connection), Gym: getGymModel(database.connection), authorizationService, logger });
     mountRouter('/api/v1/gyms/:gymId/staff', createStaffRouter(staffService, authService, createAuthorizationMiddleware(authorizationService)));

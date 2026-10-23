@@ -61,6 +61,7 @@ async function startServer({
         }
         try {
           await app?.locals.memberPhotoService?.stopCleanup();
+          await app?.locals.ownerPhotoService?.stopCleanup();
           await database.disconnect();
         } catch {
           failed = true;
@@ -98,6 +99,9 @@ async function startServer({
         database.connection.models.MemberProfile.createIndexes(),
         database.connection.models.MemberPhotoOperation?.createIndexes(),
         database.connection.models.MemberPhotoCleanup?.createIndexes(),
+        database.connection.models.OwnerProfile?.createIndexes(),
+        database.connection.models.OwnerPhotoOperation?.createIndexes(),
+        database.connection.models.OwnerPhotoCleanup?.createIndexes(),
         database.connection.models.TrainerProfile.createIndexes(),
         database.connection.models.TrainerMemberAssignment.createIndexes(),
         database.connection.models.MembershipPlan.createIndexes(),
@@ -139,6 +143,7 @@ async function startServer({
       server.once('error', reject);
     });
     app.locals.memberPhotoService?.startCleanup();
+    app.locals.ownerPhotoService?.startCleanup();
     logger.info({ port: config.port }, 'API server started');
     server.on('error', () => {
       logger.error('HTTP server error');
