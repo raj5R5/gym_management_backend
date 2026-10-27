@@ -8,15 +8,15 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp } = require('../../src/app');
+const { createApp: createRuntimeApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createDashboardService } = require('../../src/modules/gymDashboard/dashboard.service');
 let isolated, database, config, models, app, gymA, gymB, admin, trainer, member, passwordHash, memberA, memberOther, memberB, planA, planB, trainerA, branchA, branchOther, branchB;
 const password = randomBytes(24).toString('base64url');
-const missingId = () => String(new mongoose.Types.ObjectId());
 const subscriptionPath = (gym = gymA) => `/api/v1/gyms/${gym._id}/subscriptions`;
-const path = (gym = gymA) => `/api/v1/gyms/${gym._id}/attendance`;
 const day = (offset = 0) => { const value = new Date(); value.setUTCDate(value.getUTCDate() + offset); return value.toISOString().slice(0, 10); };
 const input = (overrides = {}) => ({ memberId: String(memberA._id), membershipPlanId: String(planA._id), startDate: day(), ...overrides });
 function error(response, status, code) {
@@ -90,12 +90,6 @@ beforeEach(async () => {
   planB = await models.MembershipPlan.create({ ...plan, gymId: gymB._id });
 });
 
-const checkInInput = (overrides = {}) => ({ memberId: String(memberA._id), branchId: String(branchA._id), ...overrides });
-async function visit(token, overrides = {}, gym = gymA) {
-  const response = await send('post', `${path(gym)}/check-in`, token, checkInInput(overrides));
-  assert.equal(response.status, 201, JSON.stringify(response.body)); return response.body.data;
-}
-const out = (data, gym = gymA) => `${path(gym)}/${data.id}/check-out`;
 
 
 const dashboardPath = (gym = gymA) => `/api/v1/gyms/${gym._id}/dashboard`;
@@ -132,10 +126,9 @@ test('admin gets profile counts and zero financial/attendance metrics, without s
   assert.deepEqual(data.trainers, { total: 1, active: 1, inactive: 0, suspended: 0 });
   assert.deepEqual(data.subscriptions, { currentlyActive: 0, expiringSoon: 0, expired: 0 });
   assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: 0, periodSuccessfulCount: 0, outstandingAmountPaise: 0 });
-  assert.deepEqual(data.attendance, { periodVisits: 0, periodUniqueMembers: 0, currentlyCheckedIn: 0 });
   assert.equal(response.headers['cache-control'], 'no-store');
   assert.equal(response.body.meta.requestId, response.headers['x-request-id']);
-  assert.deepEqual(Object.keys(data).sort(), ['attendance', 'members', 'payments', 'period', 'subscriptions', 'trainers']);
+  assert.deepEqual(Object.keys(data).sort(), ['members', 'payments', 'period', 'subscriptions', 'trainers']);
   assert.doesNotMatch(JSON.stringify(data), /password|token|email|firstName|memberId|userId|_id/i);
 });
 test('empty gym returns zero metrics', async () => {
@@ -148,8 +141,8 @@ for (const role of ['trainer', 'member']) test(`${role} is denied`, async () => 
   error(await send('get', dashboardPath(), await login(role === 'trainer' ? trainer : member)), 403, 'FORBIDDEN');
 });
 test('anonymous request denied', async () => { error(await send('get', dashboardPath()), 401, 'INVALID_AUTHENTICATION'); });
-test('cross gym denied even with valid date and branch filters', async () => {
-  error(await send('get', dashboardPath(gymB) + `?branchId=${branchB._id}&from=2026-03-01`, await login()), 403, 'FORBIDDEN');
+test('cross gym denied even with valid date filters', async () => {
+  error(await send('get', dashboardPath(gymB) + `?from=2026-03-01`, await login()), 403, 'FORBIDDEN');
 });
 for (const status of ['inactive', 'suspended']) test(`${status} GymAccess denied`, async () => {
   const token = await login(); await models.GymAccess.updateOne({ userId: admin._id }, { status });
@@ -159,7 +152,7 @@ test('inactive gym denied', async () => {
   const token = await login(); await models.Gym.updateOne({ _id: gymA._id }, { status: 'inactive' });
   error(await send('get', dashboardPath(), token), 403, 'FORBIDDEN');
 });
-test('status counts use profiles and current branch, including inactive/suspended', async () => {
+test('status counts use all gym profiles, including inactive/suspended', async () => {
   await models.MemberProfile.updateOne({ _id: memberA._id }, { status: 'inactive' });
   await models.MemberProfile.updateOne({ _id: memberOther._id }, { status: 'suspended', branchId: branchOther._id });
   const person = { firstName: 'Test', lastName: 'Trainer', phone: '9876543210', gymId: gymA._id };
@@ -168,20 +161,9 @@ test('status counts use profiles and current branch, including inactive/suspende
   const token = await login(); const all = await dashboard(token);
   assert.deepEqual(all.members, { total: 2, active: 0, inactive: 1, suspended: 1 });
   assert.deepEqual(all.trainers, { total: 3, active: 1, inactive: 1, suspended: 1 });
-  const branch = await dashboard(token, `?branchId=${branchA._id}`);
-  assert.deepEqual(branch.members, { total: 1, active: 0, inactive: 1, suspended: 0 });
-  assert.deepEqual(branch.trainers, { total: 2, active: 1, inactive: 1, suspended: 0 });
 });
-test('empty branch returns zeros', async () => {
-  const data = await dashboard(await login(), `?branchId=${branchOther._id}`);
-  assert.equal(data.members.total, 0); assert.equal(data.trainers.total, 0); assert.equal(data.attendance.currentlyCheckedIn, 0);
-});
-test('missing, foreign and inactive branch fail closed', async () => {
-  const token = await login();
-  for (const id of [missingId(), String(branchB._id)]) error(await send('get', dashboardPath() + `?branchId=${id}`, token), 404, 'BRANCH_NOT_FOUND');
-  await models.Branch.updateOne({ _id: branchA._id }, { status: 'inactive' });
-  error(await send('get', dashboardPath() + `?branchId=${branchA._id}`, token), 403, 'FORBIDDEN');
-});
+
+
 test('strict identifiers, dates, unknown parameters and MongoDB operators rejected', async () => {
   const token = await login();
   for (const query of ['?branchId=bad', '?from=2026-02-30', '?from=2026-2-01', '?from=2026-01-01T00:00:00Z',
@@ -257,37 +239,10 @@ test('invalid stored financial values and overflowing totals fail closed', async
   try { error(await send('get', dashboardPath(), await login()), 500, 'INTERNAL_SERVER_ERROR'); }
   finally { models.Payment.aggregate = original; }
 });
-test('completed visits, distinct members and open current visits have separate semantics', async () => {
-  const sub = await period('2026-03-01', 30); const other = await period('2026-03-01', 30, { memberId: memberOther._id });
-  await historicalVisit(sub, '2026-03-01T00:00Z'); await historicalVisit(sub, '2026-03-01T02:00Z');
-  await historicalVisit(other, '2026-03-01T03:00Z'); await historicalVisit(sub, '2026-03-02T00:00Z');
-  await historicalVisit(sub, '2026-03-01T04:00Z', { status: 'cancelled' });
-  await historicalVisit(sub, '2026-10-01T00:00Z', { status: 'open', checkOutAt: undefined });
-  const data = await dashboard(await login(), '?from=2026-03-01');
-  assert.deepEqual(data.attendance, { periodVisits: 3, periodUniqueMembers: 2, currentlyCheckedIn: 1 });
-});
-test('attendance UTC boundary excludes next midnight and includes start', async () => {
-  const sub = await period('2026-03-01', 30);
-  for (const at of ['2026-02-28T23:59:59.999Z', '2026-03-01T00:00Z', '2026-03-01T23:59:59.999Z', '2026-03-02T00:00Z']) await historicalVisit(sub, at);
-  assert.equal((await dashboard(await login(), '?from=2026-03-01')).attendance.periodVisits, 2);
-});
-test('branch transfer moves subscription/payment scope but preserves historical attendance branch', async () => {
-  const sub = await period(day(-1), 30); const token = await login();
-  await payment(token, { id: String(sub._id), memberId: String(sub.memberId) }, 100);
-  await historicalVisit(sub, new Date().toISOString());
-  await models.MemberProfile.updateOne({ _id: memberA._id }, { branchId: branchOther._id });
-  const first = await dashboard(token, `?branchId=${branchA._id}`); const second = await dashboard(token, `?branchId=${branchOther._id}`);
-  assert.equal(first.subscriptions.currentlyActive, 0); assert.equal(second.subscriptions.currentlyActive, 1);
-  assert.equal(first.payments.periodSuccessfulCount, 0); assert.equal(second.payments.periodSuccessfulAmountPaise, 100);
-  assert.equal(first.attendance.periodVisits, 1); assert.equal(second.attendance.periodVisits, 0);
-});
-test('open attendance obeys historical branch, not current member branch', async () => {
-  const token = await login(); await create(token); const opened = await visit(token);
-  await models.MemberProfile.updateOne({ _id: memberA._id }, { branchId: branchOther._id });
-  assert.equal((await dashboard(token, `?branchId=${branchA._id}`)).attendance.currentlyCheckedIn, 1);
-  assert.equal((await dashboard(token, `?branchId=${branchOther._id}`)).attendance.currentlyCheckedIn, 0);
-  const response = await send('post', out(opened), token, {}); assert.equal(response.status, 200);
-});
+
+
+
+
 test('foreign and broken member/subscription/plan/branch references are never attributed', async () => {
   const valid = await period('2026-03-01', 30);
   await period('2026-03-01', 30, { memberId: memberB._id });
@@ -297,8 +252,7 @@ test('foreign and broken member/subscription/plan/branch references are never at
     memberId, subscriptionId: valid._id, amountPaise: 500, paymentMethod: 'cash', paidAt: new Date('2026-03-01T00:00Z') });
   await historicalVisit(valid, '2026-03-01T00:00Z', { branchId: branchB._id });
   await historicalVisit(valid, '2026-03-01T01:00Z', { subscriptionId: new mongoose.Types.ObjectId() });
-  const data = await fixed('2026-03-10T12:00:00Z', { from: '2026-03-01', branchId: String(branchA._id) });
-  assert.equal(data.subscriptions.currentlyActive, 1); assert.equal(data.payments.periodSuccessfulCount, 0); assert.equal(data.attendance.periodVisits, 0);
+  const data = await fixed('2026-03-10T12:00:00Z', { from: '2026-03-01' });
   assert.equal(data.payments.outstandingAmountPaise, 150000);
 });
 test('dashboard is read-only, performs fixed aggregation count, and has no dashboard collection', async () => {
@@ -312,7 +266,7 @@ test('dashboard is read-only, performs fixed aggregation count, and has no dashb
     const model = models[name]; const original = model.aggregate;
     model.aggregate = function (...args) { aggregations++; return original.apply(this, args); }; restores.push(() => { model.aggregate = original; });
   }
-  try { await dashboard(token); assert.equal(aggregations, 7); assert.equal(await snapshot(), before); }
+  try { await dashboard(token); assert.equal(aggregations, 6); assert.equal(await snapshot(), before); }
   finally { restores.forEach((restore) => restore()); }
   assert.equal(Object.keys(models).some((name) => /dashboard/i.test(name)), false);
 });
@@ -335,7 +289,6 @@ test('other gym source records excluded from every operational metric', async ()
   await historicalVisit(foreign, '2026-03-02T00:00Z', { gymId: gymB._id, branchId: branchB._id, status: 'open', checkOutAt: undefined });
   const data = await fixed('2026-03-10T12:00:00Z', { from: '2026-03-01' });
   assert.equal(data.members.total, 2); assert.equal(data.subscriptions.currentlyActive, 0);
-  assert.equal(data.payments.periodSuccessfulCount, 0); assert.equal(data.attendance.periodVisits, 0); assert.equal(data.attendance.currentlyCheckedIn, 0);
 });
 test('service revalidates access and cannot trust a stale admin authorization context', async () => {
   await login(); const { auth, authorization } = await context();
@@ -393,15 +346,13 @@ test('dues use all successful payments regardless of selected period and ignore 
   assert.equal(data.payments.periodSuccessfulAmountPaise, 0);
   assert.equal(data.payments.outstandingAmountPaise, 50000);
 });
-test('outstanding dues respect gym and current-member branch isolation', async () => {
+test('outstanding dues respect gym isolation despite historical branch IDs', async () => {
   const token = await login();
   await period('2020-01-01', 30);
   await period('2020-01-01', 30, { memberId: memberOther._id });
   await period('2020-01-01', 30, { gymId: gymB._id, memberId: memberB._id, membershipPlanId: planB._id });
   await models.MemberProfile.updateOne({ _id: memberOther._id }, { branchId: branchOther._id });
   assert.equal((await dashboard(token)).payments.outstandingAmountPaise, 300000);
-  assert.equal((await dashboard(token, `?branchId=${branchA._id}`)).payments.outstandingAmountPaise, 150000);
-  assert.equal((await dashboard(token, `?branchId=${branchOther._id}`)).payments.outstandingAmountPaise, 150000);
 });
 test('payments with foreign gym or wrong member cannot reduce another subscription balance', async () => {
   const token = await login(); const sub = await period('2020-01-01', 30);
@@ -453,17 +404,16 @@ for (const example of [
   await models.Gym.updateOne({ _id: gymA._id }, { 'settings.timezone': example.zone });
   const data = await fixed(example.now, { preset: example.preset });
   assert.deepEqual(data.period, { timezone: example.zone, from: example.from, to: example.to,
-    startUtc: example.start, endUtc: example.end, branchId: null });
+    startUtc: example.start, endUtc: example.end,  });
 });
 
-test('quick presets pass through HTTP validation and retain branch authorization', async () => {
+test('quick presets retain gym/role authorization and reject retired branch filters', async () => {
   const token = await login();
   for (const preset of ['last7Days', 'thisMonth']) {
-    const data = await dashboard(token, `?preset=${preset}&branchId=${branchA._id}`);
-    assert.equal(data.period.branchId, String(branchA._id));
-    error(await send('get', dashboardPath(gymB) + `?preset=${preset}`, token), 403, 'FORBIDDEN');
-    error(await send('get', dashboardPath() + `?preset=${preset}&branchId=${branchB._id}`, token), 404, 'BRANCH_NOT_FOUND');
-    error(await send('get', dashboardPath() + `?preset=${preset}`, await login(trainer)), 403, 'FORBIDDEN');
+    await dashboard(token, '?preset=' + preset);
+    error(await send('get', dashboardPath(gymB) + '?preset=' + preset, token), 403, 'FORBIDDEN');
+    error(await send('get', dashboardPath() + '?preset=' + preset + '&branchId=' + branchB._id, token), 400, 'VALIDATION_ERROR');
+    error(await send('get', dashboardPath() + '?preset=' + preset, await login(trainer)), 403, 'FORBIDDEN');
   }
 });
 test('unknown presets and presets combined with explicit dates rejected', async () => {

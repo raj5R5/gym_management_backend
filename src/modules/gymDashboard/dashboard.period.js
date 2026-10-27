@@ -31,6 +31,14 @@ async function dashboardPeriod(Gym, gymId, timezone, query, now) {
   if (!(period.start instanceof Date) || !(period.end instanceof Date) || period.start >= period.end
     || localDate(period.start, timezone) !== from) failure('VALIDATION_ERROR');
   return { today: new Date(`${today}T00:00:00.000Z`), start: period.start, end: period.end,
-    dto: { timezone, from, to, startUtc: period.start.toISOString(), endUtc: period.end.toISOString(), branchId: query.branchId?.toLowerCase() ?? null } };
+    dto: { timezone, from, to, startUtc: period.start.toISOString(), endUtc: period.end.toISOString() } };
 }
-module.exports = { dashboardPeriod };
+async function gymCalendar(Gym, gymId, now = new Date(), session) {
+  const gym = await Gym.findOne({ _id: gymId, status: 'active' }).session(session ?? null).select('settings.timezone').lean();
+  if (!gym) failure('FORBIDDEN');
+  const timezone = gym.settings?.timezone ?? 'UTC';
+  if (typeof timezone !== 'string' || !timezone) failure('INVALID_DASHBOARD_STATE');
+  const label = localDate(now, timezone);
+  return { timezone, label, day: new Date(`${label}T00:00:00.000Z`) };
+}
+module.exports = { dashboardPeriod, gymCalendar, localDate };

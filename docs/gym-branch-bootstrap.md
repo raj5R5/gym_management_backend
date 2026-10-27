@@ -1,3 +1,5 @@
+> Scope update (2026-10-26): branch/attendance contracts in this milestone document are historical. [Current MuscleDesk scope, compatibility and gym-calendar policy](scope-cleanup.md) supersedes them; gym-level security and remaining workflows are preserved.
+
 # Gym and Branch development bootstrap API
 
 These endpoints are unauthenticated development/bootstrap functionality. They are not production-authorized APIs. No account, GymAccess, or role handling exists yet.

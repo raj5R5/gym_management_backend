@@ -94,6 +94,7 @@ async function startServer({
     if (database.connection?.models?.AuthSession) {
       await Promise.all([
         database.connection.models.AuthSession.createIndexes(),
+        database.connection.models.AccountDeletionRequest?.createIndexes(),
         database.connection.models.Gym.createIndexes(),
         database.connection.models.RefreshTokenRecord.createIndexes(),
         database.connection.models.MemberProfile.createIndexes(),
@@ -108,7 +109,6 @@ async function startServer({
         database.connection.models.MemberSubscription.createIndexes(),
         database.connection.models.RenewalOperation.createIndexes(),
         database.connection.models.Payment.createIndexes(),
-        database.connection.models.Attendance.createIndexes(),
         database.connection.models.MemberActivation.createIndexes(),
         database.connection.models.MemberOnboardingOperation.createIndexes(),
       ]);
@@ -119,7 +119,6 @@ async function startServer({
       // Explicitly create only the bootstrap domain indexes; never drop existing indexes.
       await Promise.all([
         database.connection.models.Gym.createIndexes(),
-        database.connection.models.Branch.createIndexes(),
       ]);
     }
     if (database.connection?.models?.UserAccount) await verifyIdentityIndexes(database.connection);
@@ -138,7 +137,7 @@ async function startServer({
     }
     if (stopping) throw new Error('Startup interrupted.');
     await new Promise((resolve, reject) => {
-      server = app.listen(config.port);
+      server = config.bindHost ? app.listen(config.port, config.bindHost) : app.listen(config.port);
       server.once('listening', resolve);
       server.once('error', reject);
     });

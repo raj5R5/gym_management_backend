@@ -14,7 +14,8 @@ const payment = z.strictObject({
 }).refine((value) => value.amountPaise === 0 || !['upi', 'bank_transfer', 'card'].includes(value.method)
   || Boolean(value.reference), 'A reference is required for this payment method');
 const completeOnboarding = z.strictObject({
-  member: onboardMember,
+  // Legacy frozen requests must retain their original digest and receipt.
+  member: onboardMember.extend({ branchId: objectId.optional() }),
   membership: z.strictObject({
     planId: objectId,
     startDate: createSubscription.shape.startDate.optional(),

@@ -8,12 +8,14 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createTrainerService } = require('../../src/modules/trainers/trainer.service');
 const { startServer } = require('../../src/server');
-let isolated, database, config, models, app, gymA, gymB, branchA, branchB, admin, trainer, member, passwordHash;
+let isolated, database, config, models, app, gymA, gymB, admin, trainer, member, passwordHash;
 const password = randomBytes(24).toString('base64url');
 const missingId = () => String(new mongoose.Types.ObjectId());
 const path = (gym = gymA) => `/api/v1/gyms/${gym._id}/trainers`;
@@ -72,14 +74,11 @@ beforeEach(async () => {
     assign(user);
     await models.GymAccess.create({ userId: user._id, gymId: gymA._id, role, status: 'active' });
   }
-  const address = { line1: '123 Test Road', city: 'Test City', countryCode: 'IN' };
-  branchA = await models.Branch.create({ gymId: gymA._id, name: 'Branch A', nameKey: 'branch a', address });
-  branchB = await models.Branch.create({ gymId: gymB._id, name: 'Branch B', nameKey: 'branch b', address });
 });
 
 test('admin creates a standalone trainer with normalized code and no account/grant creation', async () => {
   const token = await login();
-  const data = await create(token, { trainerCode: ' gym001 ', branchId: String(branchA._id), dateOfBirth: '1995-06-12',
+  const data = await create(token, { trainerCode: ' gym001 ', dateOfBirth: '1995-06-12',
     gender: 'other', address: { line1: 'Home Road', city: 'City', countryCode: 'IN' },
     specializations: [' Strength ', 'Mobility'] });
   assert.equal(data.trainerCode, 'GYM001'); assert.equal(data.status, 'active');
@@ -123,15 +122,7 @@ test('inactive/suspended/removed access and inactive/nonexistent gyms deny train
   assert.equal(await models.TrainerProfile.countDocuments(), 0);
 });
 
-test('missing, invalid, inactive and cross-gym branch assignments are rejected', async () => {
-  const token = await login();
-  error(await send('post', path(), token, input({ branchId: 'invalid' })), 400, 'VALIDATION_ERROR');
-  for (const branchId of [missingId(), String(branchB._id)]) {
-    error(await send('post', path(), token, input({ branchId })), 404, 'BRANCH_NOT_FOUND');
-  }
-  await models.Branch.updateOne({ _id: branchA._id }, { $set: { status: 'inactive' } });
-  error(await send('post', path(), token, input({ branchId: String(branchA._id) })), 403, 'FORBIDDEN');
-});
+
 
 test('normalized code uniqueness is enforced by MongoDB under concurrent creation within one gym', async () => {
   const token = await login();
@@ -241,17 +232,7 @@ test('gym, user and trainer code are immutable through PATCH and model query upd
   assert.equal((await models.TrainerProfile.findById(data.id)).gymId.toString(), String(gymA._id));
 });
 
-test('branch updates allow same-gym movement/removal but reject foreign/inactive/missing branches', async () => {
-  const token = await login(); const data = await create(token);
-  const updated = await send('patch', `${path()}/${data.id}`, token, { branchId: String(branchA._id) });
-  assert.equal(updated.status, 200); assert.equal(updated.body.data.branchId, String(branchA._id));
-  for (const branchId of [String(branchB._id), missingId()]) {
-    error(await send('patch', `${path()}/${data.id}`, token, { branchId }), 404, 'BRANCH_NOT_FOUND');
-  }
-  await models.Branch.updateOne({ _id: branchA._id }, { $set: { status: 'inactive' } });
-  error(await send('patch', `${path()}/${data.id}`, token, { branchId: String(branchA._id) }), 403, 'FORBIDDEN');
-  assert.equal((await send('patch', `${path()}/${data.id}`, token, { branchId: null })).body.data.branchId, undefined);
-});
+
 
 test('strict input validation rejects bad required fields, dates, contact data and unsupported future fields', async () => {
   const token = await login();
@@ -355,18 +336,7 @@ test('authorization database failures fail closed before profile writes', async 
   assert.equal(writes, 0);
 });
 
-test('branch lookup failures deny creation and mutation without changing profile data', async (t) => {
-  const token = await login(); const data = await create(token);
-  t.mock.method(models.Branch, 'findOne', () => { throw new Error('private branch details'); });
-  error(await send('post', path(), token, input({ trainerCode: 'TR002', branchId: String(branchA._id) })),
-    500, 'INTERNAL_SERVER_ERROR');
-  const response = await send('patch', `${path()}/${data.id}`, token,
-    { firstName: 'Changed', branchId: String(branchA._id) });
-  error(response, 500, 'INTERNAL_SERVER_ERROR');
-  assert.equal(JSON.stringify(response.body).includes('private'), false);
-  assert.equal((await models.TrainerProfile.findById(data.id)).firstName, 'Alex');
-  assert.equal(await models.TrainerProfile.countDocuments(), 1);
-});
+
 
 test('specializations support replacement, empty lists and literal metacharacters without query injection', async () => {
   const token = await login(); const data = await create(token, { specializations: ['Mobility (advanced)'] });
@@ -398,4 +368,15 @@ test('service entry points reject missing gym scope and stale access on every op
   for (const operation of operations) await assert.rejects(operation(authorization), { code: 'FORBIDDEN' });
   assert.equal(await models.TrainerProfile.countDocuments(), 1);
   assert.equal((await models.TrainerProfile.findById(data.id)).status, 'active');
+});
+
+test('legacy branch-bearing record remains readable/editable without branch lookup', async () => {
+  const token = await login(); const original = await create(token);
+  const legacy = new mongoose.Types.ObjectId();
+  await models.TrainerProfile.updateOne({ _id: original.id }, { branchId: legacy });
+  const updated = await send('patch', path() + '/' + original.id, token, { firstName: 'Updated' });
+  assert.equal(updated.status, 200); assert.equal(updated.body.data.firstName, 'Updated');
+  assert.equal(updated.body.data.branchId, undefined);
+  assert.equal(String((await models.TrainerProfile.findById(original.id).lean()).branchId), String(legacy));
+  assert.equal((await send('get', path() + '/' + original.id, token)).status, 200);
 });

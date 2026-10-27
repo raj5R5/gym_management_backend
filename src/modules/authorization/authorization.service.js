@@ -29,14 +29,13 @@ function requireScope(auth, authorization) {
     const parsed = objectId.safeParse(authorization[field]);
     return parsed.success && parsed.data === parsed.data.toLowerCase();
   });
-  if (!validIds || authorization.userId !== userId || !roles.includes(authorization.role)
-    || (authorization.branchId !== undefined && !objectId.safeParse(authorization.branchId).success)) {
+  if (!validIds || authorization.userId !== userId || !roles.includes(authorization.role)) {
     throw failure('FORBIDDEN');
   }
   return authorization;
 }
 
-function createAuthorizationService({ GymAccess, Gym, Branch }) {
+function createAuthorizationService({ GymAccess, Gym }) {
   return {
     async requireGymAccess(auth, gymId) {
       const userId = authenticatedUser(auth);
@@ -55,18 +54,6 @@ function createAuthorizationService({ GymAccess, Gym, Branch }) {
       const selectedGym = objectId.safeParse(gymId);
       if (!selectedGym.success || scope.gymId !== selectedGym.data.toLowerCase()) throw failure('FORBIDDEN');
       if (!allowedRoles.includes(scope.role)) throw failure('FORBIDDEN');
-    },
-    async requireBranchAccess(auth, authorization, gymId, branchId) {
-      const scope = requireScope(auth, authorization);
-      const selectedGymId = identifier(gymId);
-      const selectedBranchId = identifier(branchId);
-      if (scope.gymId !== selectedGymId) throw failure('FORBIDDEN');
-      // Constrain the database query itself; never look up a branch globally first.
-      const branch = await Branch.findOne({ _id: selectedBranchId, gymId: scope.gymId })
-        .select('_id status').lean();
-      if (!branch) throw failure('BRANCH_NOT_FOUND');
-      if (branch.status !== 'active') throw failure('FORBIDDEN');
-      return Object.freeze({ ...scope, branchId: String(branch._id) });
     },
   };
 }

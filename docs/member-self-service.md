@@ -1,3 +1,5 @@
+> Scope update (2026-10-26): branch/attendance contracts in this milestone document are historical. [Current MuscleDesk scope, compatibility and gym-calendar policy](scope-cleanup.md) supersedes them; gym-level security and remaining workflows are preserved.
+
 # Member self-service — Milestone 26
 
 The `/me` endpoints use the authenticated member identity. The client cannot

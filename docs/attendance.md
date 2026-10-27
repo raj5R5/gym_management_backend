@@ -1,3 +1,5 @@
+> RETIRED (2026-10-26): attendance is outside the active MuscleDesk product. The specification below is historical only. See [current scope and compatibility](scope-cleanup.md).
+
 # Attendance — Milestone 16
 
 Attendance records one gym member visit. It is separate from MemberSubscription

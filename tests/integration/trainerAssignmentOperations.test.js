@@ -8,7 +8,9 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createAssignmentService } = require('../../src/modules/trainerAssignments/assignment.service');
@@ -196,15 +198,15 @@ test('profile status changes never mutate assignment history', async () => {
   assert.deepEqual(await models.TrainerMemberAssignment.findById(assignment.id).lean(), before);
   error(await send('post', path(), token, input({ memberId: String(memberOther._id) })), 403, 'FORBIDDEN');
 });
-test('branch differences and subsequent transfers preserve relationship history', async () => {
+test('legacy branch data does not alter relationship history or leak into views', async () => {
   const otherBranch = await models.Branch.create({ gymId: gymA._id, name: 'Other', nameKey: 'other', address: { line1: 'Road', city: 'City', countryCode: 'IN' } });
   await models.TrainerProfile.updateOne({ _id: trainerA._id }, { branchId: branchA._id });
   await models.MemberProfile.updateOne({ _id: memberA._id }, { branchId: otherBranch._id });
   const token = await login(); const assignment = await create(token); const before = await models.TrainerMemberAssignment.findById(assignment.id).lean();
-  assert.equal((await send('get', trainerView(), token)).body.data[0].branchId, String(otherBranch._id));
-  assert.equal((await send('get', memberView(), token)).body.data[0].branchId, String(branchA._id));
+  assert.equal((await send('get', trainerView(), token)).body.data[0].branchId, undefined);
+  assert.equal((await send('get', memberView(), token)).body.data[0].branchId, undefined);
   await models.MemberProfile.updateOne({ _id: memberA._id }, { branchId: branchA._id });
-  assert.equal((await send('get', trainerView(), token)).body.data[0].branchId, String(branchA._id));
+  assert.equal((await send('get', trainerView(), token)).body.data[0].branchId, undefined);
   assert.deepEqual(await models.TrainerMemberAssignment.findById(assignment.id).lean(), before);
   const foreignBranch = await models.Branch.findOne({ gymId: gymB._id });
   await models.MemberProfile.collection.updateOne({ _id: memberA._id }, { $set: { branchId: foreignBranch._id } });

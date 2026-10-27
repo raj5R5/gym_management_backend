@@ -9,7 +9,7 @@ const calendarDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
   return value >= '0001-01-01' && Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 });
 const createSubscription = z.strictObject({ memberId: objectId, membershipPlanId: objectId,
-  startDate: calendarDate.refine((value) => value <= today(), 'Future starts are not supported yet'),
+  startDate: calendarDate,
   notes: z.string().trim().min(1).max(2000).optional() });
 const renewalTerms = z.strictObject({ planName: createPlan.shape.name, durationDays: createPlan.shape.durationDays,
   pricePaise: createPlan.shape.price, startDate: calendarDate, endDate: calendarDate });

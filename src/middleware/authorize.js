@@ -21,13 +21,6 @@ function createAuthorizationMiddleware(service) {
         } catch (error) { delete req.authorization; return next(error); }
       };
     },
-    requireBranchAccess: async (req, _res, next) => {
-      try {
-        req.authorization = await service.requireBranchAccess(req.auth, req.authorization,
-          req.params.gymId, req.params.branchId);
-        return next();
-      } catch (error) { delete req.authorization; return next(error); }
-    },
   };
 }
 

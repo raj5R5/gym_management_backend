@@ -1,7 +1,7 @@
 const { createHash } = require('node:crypto');
 const { Types } = require('mongoose');
 const { completeOnboarding, idempotencyKey } = require('./complete.validation');
-const { today } = require('../subscriptions/subscription.validation');
+const { gymCalendar } = require('../gymDashboard/dashboard.period');
 
 function fail(code) { const error = new Error('Member onboarding failed.'); error.code = code; throw error; }
 function parse(schema, value) { const result = schema.safeParse(value); if (!result.success) fail('VALIDATION_ERROR'); return result.data; }
@@ -53,7 +53,7 @@ function createCompleteOnboardingService({ MemberOnboardingOperation, Gym, GymAc
     const requestDigest = digest(JSON.stringify(canonical(data)));
     const existing = await MemberOnboardingOperation.findOne(filter).lean();
     if (existing) return replay(existing, requestDigest);
-    const startDate = data.membership?.startDate ?? today();
+    const startDate = data.membership?.startDate ?? (await gymCalendar(Gym, selected.gymId)).label;
     const session = await MemberOnboardingOperation.db.startSession();
     try {
       return await session.withTransaction(async () => {
@@ -61,7 +61,7 @@ function createCompleteOnboardingService({ MemberOnboardingOperation, Gym, GymAc
         // Retry callbacks read the winning operation before performing any domain inserts.
         const committed = await MemberOnboardingOperation.findOne(filter).session(session).lean();
         if (committed) return replay(committed, requestDigest);
-        const member = await memberService.onboardForComplete(auth, selected, data.member, session);
+        const member = await memberService.onboardForComplete(auth, selected, Object.fromEntries(Object.entries(data.member).filter(([key]) => key !== 'branchId')), session);
         const subscription = data.membership ? await subscriptionService.createForPurchase(auth, selected, {
           memberId: member.id, membershipPlanId: data.membership.planId, startDate }, session) : null;
         const initial = data.membership?.payment;
@@ -69,7 +69,7 @@ function createCompleteOnboardingService({ MemberOnboardingOperation, Gym, GymAc
           memberId: member.id, subscriptionId: subscription.id, amountPaise: initial.amountPaise,
           paymentMethod: initial.method, paidAt: initial.paidAt, transactionReference: initial.reference }, session) : null;
         const operationId = new Types.ObjectId();
-        const result = resultDto(operationId, member, subscription, payment);
+        const result = resultDto(operationId, data.member.branchId ? { ...member, branchId: data.member.branchId } : member, subscription, payment);
         await MemberOnboardingOperation.create([{ _id: operationId, ...filter, requestDigest, result }], { session });
         return result;
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });

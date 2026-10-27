@@ -11,7 +11,6 @@ const { createRequestLogger, routeTemplatePrefix } = require('../../src/middlewa
 const requestId = require('../../src/middleware/requestId');
 const notFound = require('../../src/middleware/notFound');
 const errorHandler = require('../../src/middleware/errorHandler');
-const { createGymRouter } = require('../../src/modules/gyms/gym.routes');
 
 function capture() {
   let output = '';
@@ -139,16 +138,4 @@ test('application wiring logs health, Dashboard denials, and unknown paths witho
     completion(lines().slice(before), { method: 'GET', status, route });
   }
   await connection.close();
-});
-
-test('nested branch routers preserve all server-declared mount parameters', async () => {
-  const captured = capture();
-  const branchApp = express();
-  branchApp.use(requestId, createRequestLogger(captured.logger));
-  branchApp.use('/api/v1/gyms', routeTemplatePrefix('/api/v1/gyms'), createGymRouter({}, {
-    get: async () => ({ name: secrets.name }),
-  }));
-  const path = `/api/v1/gyms/${secrets.gymId}/branches/${secrets.memberId}`;
-  assert.equal((await sensitiveRequest(branchApp, 'get', path)).status, 200);
-  completion(captured.lines(), { method: 'GET', status: 200, route: '/api/v1/gyms/:gymId/branches/:branchId' });
 });

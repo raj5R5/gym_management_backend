@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { isIP } = require('node:net');
 
 const originSchema = z.string().refine((value) => {
   try {
@@ -25,7 +26,19 @@ function strongSigningSecret(value) {
   return !bytes.every((byte, index) => !index || (byte - bytes[index - 1] + 256) % 256 === step);
 }
 
+function proxyAddress(value) {
+  const parts = value.split('/');
+  const version = isIP(parts[0]);
+  if (!version || parts.length > 2) return false;
+  if (parts.length === 1) return true;
+  return /^\d+$/.test(parts[1]) && Number(parts[1]) > 0 && Number(parts[1]) <= (version === 4 ? 32 : 128);
+}
+
 const envSchema = z.object({
+  API_BIND_HOST: z.string().refine((value) => Boolean(isIP(value))).optional(),
+  TRUSTED_PROXIES: z.string().default('').transform((value) =>
+    value.split(',').map((address) => address.trim()).filter(Boolean)
+  ).pipe(z.array(z.string().refine(proxyAddress)).max(10)),
   CLOUDINARY_CLOUD_NAME: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional().or(z.literal('')),
   CLOUDINARY_API_KEY: z.string().regex(/^[0-9]{1,100}$/).optional().or(z.literal('')),
   CLOUDINARY_API_SECRET: z.string().min(10).max(256).optional().or(z.literal('')),
@@ -81,6 +94,8 @@ function loadConfig(environment = process.env) {
     mongoUri: result.data.MONGO_URI,
     enableBootstrapRoutes: result.data.ENABLE_BOOTSTRAP_ROUTES === 'true',
     port: result.data.PORT,
+    bindHost: result.data.API_BIND_HOST,
+    trustedProxies: Object.freeze([...new Set(result.data.TRUSTED_PROXIES)]),
     bootstrapPort: result.data.BOOTSTRAP_PORT,
     logLevel: result.data.LOG_LEVEL,
     allowedOrigins: Object.freeze([...new Set(result.data.ALLOWED_ORIGINS)]),

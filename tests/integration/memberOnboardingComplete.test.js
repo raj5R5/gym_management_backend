@@ -9,7 +9,9 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { startServer } = require('../../src/server');
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
@@ -158,11 +160,17 @@ test('missing, cross-gym and inactive plans roll back member insertion', async (
   await models.MembershipPlan.updateOne({ _id: planA._id }, { status: 'inactive' });
   error(await send(token, body(membership())), 403, 'FORBIDDEN'); await counts();
 });
-test('missing, foreign and inactive branches cannot escape authorized gym', async () => {
-  const token = await login();
-  for (const branchId of [missingId(), String(branchB._id)]) error(await send(token, { member: person({ branchId }) }), 404, 'BRANCH_NOT_FOUND');
-  await models.Branch.updateOne({ _id: branchA._id }, { status: 'inactive' });
-  error(await send(token, { member: person({ branchId: String(branchA._id) }) }), 403, 'FORBIDDEN'); await counts();
+test('legacy branch metadata retains frozen digest/receipt without assigning a branch', async () => {
+  const token = await login(); const key = randomUUID();
+  const input = body(membership({payment: payment({amountPaise: 40000})}));
+  input.member.branchId = String(branchB._id);
+  const first = await complete(token, input, key);
+  const replayed = await complete(token, input, key);
+  assert.deepEqual(replayed, first);
+  assert.equal(first.member.branchId, String(branchB._id));
+  assert.equal((await models.MemberProfile.findById(first.member.id).lean()).branchId, undefined);
+  error(await send(token, {...input, member: {...input.member, branchId: String(branchA._id)}}, key), 409, 'IDEMPOTENCY_KEY_CONFLICT');
+  await counts(1, 1, 1, 1);
 });
 test('trainers, members, anonymous clients and unauthorized gym denied', async () => {
   for (const role of ['trainer', 'member']) error(await send(await login(role)), 403, 'FORBIDDEN');

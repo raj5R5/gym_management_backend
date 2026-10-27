@@ -18,12 +18,12 @@ const address = z.strictObject({ line1: text(200), line2: text(200).optional(), 
 const emergencyContact = z.strictObject({ name: text(120), phone, relationship: text(80).optional() });
 const mutable = {
   firstName: text(80), lastName: text(80), phone,
-  branchId: objectId.nullable().optional(), dateOfBirth: dateOfBirth.nullable().optional(),
+  dateOfBirth: dateOfBirth.nullable().optional(),
   gender: z.enum(genders).nullable().optional(), address: address.nullable().optional(),
   emergencyContact: emergencyContact.nullable().optional(), status: z.enum(statuses),
 };
 const createMember = z.strictObject({ ...mutable, memberCode, status: z.enum(statuses).default('active') });
-const onboardMember = createMember.omit({ status: true }).extend({ branchId: objectId.optional() });
+const onboardMember = createMember.omit({ status: true });
 const updateMember = z.strictObject(mutable).partial()
   .refine((value) => Object.keys(value).length > 0, 'Update cannot be empty');
 const memberParams = z.strictObject({ gymId: objectId, memberId: objectId });

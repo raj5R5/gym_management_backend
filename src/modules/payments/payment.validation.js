@@ -11,7 +11,7 @@ const paymentParams = z.strictObject({ gymId: objectId, paymentId: objectId });
 const paymentListQuery = listQuery.extend({ memberId: objectId.optional(), subscriptionId: objectId.optional(),
   status: z.enum(statuses).optional(), paymentMethod: z.enum(methods).optional(),
   paidFrom: timestamp.optional(), paidTo: timestamp.optional(),
-  from: dashboardQuery.shape.from, to: dashboardQuery.shape.to, branchId: objectId.optional(),
+  from: dashboardQuery.shape.from, to: dashboardQuery.shape.to,
   includeMember: z.enum(['true', 'false']).optional(),
 }).refine(({ from, to, paidFrom, paidTo }) => (!from && !to) || ((!paidFrom && !paidTo) && dashboardQuery.safeParse({ from, to }).success))
   .refine((value) =>

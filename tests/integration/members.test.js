@@ -8,12 +8,14 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createMemberService } = require('../../src/modules/members/member.service');
 const { startServer } = require('../../src/server');
-let isolated, database, config, models, app, gymA, gymB, branchA, branchB, admin, trainer, member, passwordHash;
+let isolated, database, config, models, app, gymA, gymB, admin, trainer, member, passwordHash;
 const password = randomBytes(24).toString('base64url');
 const missingId = () => String(new mongoose.Types.ObjectId());
 const path = (gym = gymA) => `/api/v1/gyms/${gym._id}/members`;
@@ -72,14 +74,11 @@ beforeEach(async () => {
     assign(user);
     await models.GymAccess.create({ userId: user._id, gymId: gymA._id, role, status: 'active' });
   }
-  const address = { line1: '123 Test Road', city: 'Test City', countryCode: 'IN' };
-  branchA = await models.Branch.create({ gymId: gymA._id, name: 'Branch A', nameKey: 'branch a', address });
-  branchB = await models.Branch.create({ gymId: gymB._id, name: 'Branch B', nameKey: 'branch b', address });
 });
 
 test('admin creates a standalone member with normalized code and no account/grant creation', async () => {
   const token = await login();
-  const data = await create(token, { memberCode: ' gym001 ', branchId: String(branchA._id), dateOfBirth: '1995-06-12',
+  const data = await create(token, { memberCode: ' gym001 ', dateOfBirth: '1995-06-12',
     gender: 'other', address: { line1: 'Home Road', city: 'City', countryCode: 'IN' },
     emergencyContact: { name: 'Pat', phone: '9876543211', relationship: 'Sibling' } });
   assert.equal(data.memberCode, 'GYM001'); assert.equal(data.status, 'active');
@@ -122,15 +121,7 @@ test('inactive/suspended/removed access and inactive/nonexistent gyms deny membe
   assert.equal(await models.MemberProfile.countDocuments(), 0);
 });
 
-test('missing, invalid, inactive and cross-gym branch assignments are rejected', async () => {
-  const token = await login();
-  error(await send('post', path(), token, input({ branchId: 'invalid' })), 400, 'VALIDATION_ERROR');
-  for (const branchId of [missingId(), String(branchB._id)]) {
-    error(await send('post', path(), token, input({ branchId })), 404, 'BRANCH_NOT_FOUND');
-  }
-  await models.Branch.updateOne({ _id: branchA._id }, { $set: { status: 'inactive' } });
-  error(await send('post', path(), token, input({ branchId: String(branchA._id) })), 403, 'FORBIDDEN');
-});
+
 
 test('normalized code uniqueness is enforced by MongoDB under concurrent creation within one gym', async () => {
   const token = await login();
@@ -238,17 +229,7 @@ test('gym, user and member code are immutable through PATCH and model query upda
   assert.equal((await models.MemberProfile.findById(data.id)).gymId.toString(), String(gymA._id));
 });
 
-test('branch updates allow same-gym movement/removal but reject foreign/inactive/missing branches', async () => {
-  const token = await login(); const data = await create(token);
-  const updated = await send('patch', `${path()}/${data.id}`, token, { branchId: String(branchA._id) });
-  assert.equal(updated.status, 200); assert.equal(updated.body.data.branchId, String(branchA._id));
-  for (const branchId of [String(branchB._id), missingId()]) {
-    error(await send('patch', `${path()}/${data.id}`, token, { branchId }), 404, 'BRANCH_NOT_FOUND');
-  }
-  await models.Branch.updateOne({ _id: branchA._id }, { $set: { status: 'inactive' } });
-  error(await send('patch', `${path()}/${data.id}`, token, { branchId: String(branchA._id) }), 403, 'FORBIDDEN');
-  assert.equal((await send('patch', `${path()}/${data.id}`, token, { branchId: null })).body.data.branchId, undefined);
-});
+
 
 test('strict input validation rejects bad required fields, dates, contact data and unsupported future fields', async () => {
   const token = await login();
@@ -333,4 +314,15 @@ test('role denials never invoke member controllers, independently of service def
     error(await pending, 403, 'FORBIDDEN');
   }
   assert.equal(calls, 0);
+});
+
+test('legacy branch-bearing record remains readable/editable without branch lookup', async () => {
+  const token = await login(); const original = await create(token);
+  const legacy = new mongoose.Types.ObjectId();
+  await models.MemberProfile.updateOne({ _id: original.id }, { branchId: legacy });
+  const updated = await send('patch', path() + '/' + original.id, token, { firstName: 'Updated' });
+  assert.equal(updated.status, 200); assert.equal(updated.body.data.firstName, 'Updated');
+  assert.equal(updated.body.data.branchId, undefined);
+  assert.equal(String((await models.MemberProfile.findById(original.id).lean()).branchId), String(legacy));
+  assert.equal((await send('get', path() + '/' + original.id, token)).status, 200);
 });

@@ -1,3 +1,5 @@
+> Scope update (2026-10-26): branch/attendance contracts in this milestone document are historical. [Current MuscleDesk scope, compatibility and gym-calendar policy](scope-cleanup.md) supersedes them; gym-level security and remaining workflows are preserved.
+
 # Trainer Management — Milestone 10
 
 TrainerProfile stores trainer domain data in one gym, independently of the login

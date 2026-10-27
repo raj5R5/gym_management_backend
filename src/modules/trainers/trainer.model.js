@@ -9,7 +9,8 @@ const address = new Schema({ line1: { ...text(200), required: true }, line2: tex
 const schema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'UserAccount', immutable: true },
   gymId: { type: Schema.Types.ObjectId, ref: 'Gym', required: true, immutable: true },
-  branchId: { type: Schema.Types.ObjectId, ref: 'Branch' },
+  // Historical storage only; no active branch relationship or assignment API.
+  branchId: { type: Schema.Types.ObjectId },
   trainerCode: { type: String, required: true, trim: true, uppercase: true,
     match: /^[A-Z0-9][A-Z0-9_-]{1,31}$/, immutable: true },
   firstName: { ...text(80), required: true }, lastName: { ...text(80), required: true }, phone,

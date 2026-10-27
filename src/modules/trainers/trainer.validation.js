@@ -19,7 +19,7 @@ const specializations = z.array(text(80)).max(10).refine((values) =>
   new Set(values.map((value) => value.toLowerCase())).size === values.length, 'Specializations must be distinct');
 const mutable = {
   firstName: text(80), lastName: text(80), phone,
-  branchId: objectId.nullable().optional(), dateOfBirth: dateOfBirth.nullable().optional(),
+  dateOfBirth: dateOfBirth.nullable().optional(),
   gender: z.enum(genders).nullable().optional(), address: address.nullable().optional(),
   specializations: specializations.nullable().optional(), status: z.enum(statuses),
 };

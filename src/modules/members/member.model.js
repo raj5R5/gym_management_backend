@@ -11,7 +11,8 @@ const emergencyContact = new Schema({ name: { ...text(120), required: true }, ph
 const schema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'UserAccount', immutable: true },
   gymId: { type: Schema.Types.ObjectId, ref: 'Gym', required: true, immutable: true },
-  branchId: { type: Schema.Types.ObjectId, ref: 'Branch' },
+  // Historical storage only; no active branch relationship or assignment API.
+  branchId: { type: Schema.Types.ObjectId },
   memberCode: { type: String, required: true, trim: true, uppercase: true,
     match: /^[A-Z0-9][A-Z0-9_-]{1,31}$/, immutable: true },
   firstName: { ...text(80), required: true }, lastName: { ...text(80), required: true }, phone,

@@ -12,7 +12,7 @@ function dto(record) {
     memberId: String(record.memberId), status: record.status, assignedAt: record.assignedAt,
     endedAt: record.endedAt, createdAt: record.createdAt, updatedAt: record.updatedAt };
 }
-function createAssignmentService({ TrainerMemberAssignment, TrainerProfile, MemberProfile, Branch, authorizationService }) {
+function createAssignmentService({ TrainerMemberAssignment, TrainerProfile, MemberProfile, authorizationService }) {
   async function scope(auth, authorization, allowed) {
     authorizationService.requireRoles(auth, authorization, allowed, authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
@@ -60,19 +60,18 @@ function createAssignmentService({ TrainerMemberAssignment, TrainerProfile, Memb
     const result = await TrainerMemberAssignment.aggregate([{ $match: filter },
       ...[[TrainerProfile, 'trainerId', 'trainer'], [MemberProfile, 'memberId', 'member']].flatMap(([profileModel, field, alias]) => [
         { $lookup: { from: profileModel.collection.name, localField: field, foreignField: '_id', pipeline: [
-          { $match: { gymId } }, { $project: { _id: 1, trainerCode: 1, memberCode: 1, firstName: 1, lastName: 1, phone: 1, status: 1, branchId: 1 } },
+          { $match: { gymId } }, { $project: { _id: 1, trainerCode: 1, memberCode: 1, firstName: 1, lastName: 1, phone: 1, status: 1 } },
         ], as: alias } }, { $unwind: `$${alias}` },
       ]),
       { $facet: { records: [{ $sort: { createdAt: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit },
-        { $lookup: { from: Branch.collection.name, localField: direction === 'trainer' ? 'member.branchId' : 'trainer.branchId',
-          foreignField: '_id', pipeline: [{ $match: { gymId } }, { $project: { _id: 1 } }], as: 'branch' } }], count: [{ $count: 'total' }] } },
+], count: [{ $count: 'total' }] } },
     ]);
     return { data: result[0].records.map((record) => {
       const profile = direction === 'trainer' ? record.member : record.trainer;
       return { [direction === 'trainer' ? 'memberId' : 'trainerId']: String(profile._id),
         [direction === 'trainer' ? 'memberCode' : 'trainerCode']: direction === 'trainer' ? profile.memberCode : profile.trainerCode,
         firstName: profile.firstName, lastName: profile.lastName, phone: profile.phone, status: profile.status,
-        ...(record.branch.length ? { branchId: String(record.branch[0]._id) } : {}), assignmentId: String(record._id),
+assignmentId: String(record._id),
         assignedAt: record.assignedAt, assignmentStatus: record.status, endedAt: record.endedAt };
     }), pagination: { page, limit, total: result[0].count[0]?.total ?? 0 } };
   }

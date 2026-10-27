@@ -1,5 +1,5 @@
 const { purchaseMembership } = require('./membership.validation');
-const { today } = require('../subscriptions/subscription.validation');
+const { gymCalendar } = require('../gymDashboard/dashboard.period');
 function fail(code) { const error = new Error('Membership purchase failed.'); error.code = code; throw error; }
 function createMemberMembershipService({ MemberSubscription, subscriptionService, paymentService, authorizationService }) {
   return { async create(auth, authorization, input) {
@@ -7,7 +7,7 @@ function createMemberMembershipService({ MemberSubscription, subscriptionService
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
     authorizationService.requireRoles(auth, current, ['admin', 'trainer'], authorization.gymId);
     const parsed = purchaseMembership.safeParse(input); if (!parsed.success) fail('VALIDATION_ERROR'); const data = parsed.data;
-    const startDate = data.startDate ?? today();
+    const startDate = data.startDate ?? (await gymCalendar(MemberSubscription.db.models.Gym, current.gymId)).label;
     const session = await MemberSubscription.db.startSession();
     try {
       return await session.withTransaction(async () => {

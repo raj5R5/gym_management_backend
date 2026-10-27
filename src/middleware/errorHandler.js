@@ -1,4 +1,5 @@
 const publicErrors = {
+  ACCOUNT_DELETION_PASSWORD_INVALID: [400, 'The current password is incorrect. No new deletion request was saved.'],
   PROFILE_PASSWORD_REQUIRED: [400, 'Enter your current password to change the sign-in email.'],
   PROFILE_PASSWORD_INVALID: [400, 'The current password is incorrect. No profile changes were saved.'],
   PROFILE_CHANGED: [409, 'Your account changed. Reload the profile before saving again.'],
@@ -25,13 +26,6 @@ const publicErrors = {
   TRAINER_NOT_FOUND: [404, 'Trainer not found.'],
   ASSIGNMENT_NOT_FOUND: [404, 'Assignment not found.'],
   PLAN_NOT_FOUND: [404, 'Membership plan not found.'],
-  ATTENDANCE_NOT_FOUND: [404, 'Attendance not found.'],
-  ATTENDANCE_BRANCH_INACTIVE: [409, 'Branch is not active for check-in.'],
-  ATTENDANCE_BRANCH_MISMATCH: [409, 'Member is not assigned to this branch.'],
-  ATTENDANCE_MEMBERSHIP_REQUIRED: [409, 'A currently valid subscription is required for check-in.'],
-  ATTENDANCE_MEMBERSHIP_AMBIGUOUS: [409, 'Membership eligibility is inconsistent; check-in is denied.'],
-  ATTENDANCE_ALREADY_OPEN: [409, 'Member already has an open visit in this gym.'],
-  ATTENDANCE_NOT_OPEN: [409, 'Attendance is no longer open.'],
   STAFF_NOT_FOUND: [404, 'Staff member not found.'],
   LAST_ACTIVE_ADMIN: [409, 'The gym must retain at least one active administrator with an active account and provisioned credentials.'],
   STAFF_STORAGE_UNAVAILABLE: [503, 'Staff changes require transaction-capable database storage.'],
@@ -53,7 +47,6 @@ const publicErrors = {
   ACTIVE_MEMBERSHIP_EXISTS: [409, 'This member already has an unexpired membership. Wait until its exclusive end date before purchasing or renewing. Payments against existing memberships remain available.'],
   SUBSCRIPTION_OVERLAP: [409, 'Subscription period overlaps an existing non-cancelled subscription.'],
   SUBSCRIPTION_STORAGE_UNAVAILABLE: [503, 'Subscription creation requires transaction-capable database storage.'],
-  BRANCH_NOT_FOUND: [404, 'Branch not found.'],
   USER_ACCOUNT_NOT_FOUND: [404, 'User account not found.'],
   GYM_ACCESS_NOT_FOUND: [404, 'Gym access not found.'],
   VALIDATION_ERROR: [400, 'Request validation failed.'],
@@ -70,9 +63,7 @@ function errorHandler(error, req, res, next) {
   let message = 'An unexpected server error occurred.';
 
   if (error.code === 11000) {
-    if (error.keyPattern?.gymId && error.keyPattern?.memberId && !error.keyPattern?.trainerId) {
-      [status, code, message] = [409, 'ATTENDANCE_ALREADY_OPEN', 'Member already has an open visit in this gym.'];
-    } else if (error.keyPattern?.gymId && error.keyPattern?.paymentMethod && error.keyPattern?.transactionReference) {
+    if (error.keyPattern?.gymId && error.keyPattern?.paymentMethod && error.keyPattern?.transactionReference) {
       [status, code, message] = [409, 'DUPLICATE_PAYMENT_REFERENCE', 'A successful payment with this reference already exists for this method in this gym.'];
     } else if (error.keyPattern?.gymId && error.keyPattern?.normalizedName) {
       [status, code, message] = [409, 'DUPLICATE_PLAN_NAME', 'Plan name already exists in this gym.'];

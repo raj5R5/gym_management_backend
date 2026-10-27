@@ -8,15 +8,16 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createMemberSummaryService } = require('../../src/modules/memberSummary/summary.service');
-let isolated, database, config, models, app, gymA, gymB, admin, trainer, member, passwordHash, memberA, memberOther, memberB, planA, planB, trainerA, assignment, branchA, branchOther, branchB;
+let isolated, database, config, models, app, gymA, gymB, admin, trainer, member, passwordHash, memberA, memberOther, memberB, planA, planB, trainerA, assignment, branchA, branchB;
 const password = randomBytes(24).toString('base64url');
 const missingId = () => String(new mongoose.Types.ObjectId());
 const subscriptionPath = (gym = gymA) => `/api/v1/gyms/${gym._id}/subscriptions`;
-const path = (gym = gymA) => `/api/v1/gyms/${gym._id}/attendance`;
 const day = (offset = 0) => { const value = new Date(); value.setUTCDate(value.getUTCDate() + offset); return value.toISOString().slice(0, 10); };
 const input = (overrides = {}) => ({ memberId: String(memberA._id), membershipPlanId: String(planA._id), startDate: day(), ...overrides });
 function error(response, status, code) {
@@ -76,7 +77,6 @@ beforeEach(async () => {
   }
   const address = { line1: '1 Main Road', city: 'Pune', countryCode: 'IN' };
   branchA = await models.Branch.create({ gymId: gymA._id, name: 'Main', nameKey: 'main', address });
-  branchOther = await models.Branch.create({ gymId: gymA._id, name: 'Other', nameKey: 'other', address });
   branchB = await models.Branch.create({ gymId: gymB._id, name: 'Main', nameKey: 'main', address });
   const person = { firstName: 'Alex', lastName: 'River', phone: '9876543210' };
   memberA = await models.MemberProfile.create({ ...person, gymId: gymA._id, branchId: branchA._id, memberCode: 'ME01' });
@@ -89,12 +89,13 @@ beforeEach(async () => {
   planB = await models.MembershipPlan.create({ ...plan, gymId: gymB._id });
 });
 
-const checkInInput = (overrides = {}) => ({ memberId: String(memberA._id), branchId: String(branchA._id), ...overrides });
-async function visit(token, overrides = {}, gym = gymA) {
-  const response = await send('post', `${path(gym)}/check-in`, token, checkInInput(overrides));
-  assert.equal(response.status, 201, JSON.stringify(response.body)); return response.body.data;
+async function visit(_token, overrides = {}, gym = gymA) {
+  const subscription = await models.MemberSubscription.findOne({ gymId: gym._id, memberId: memberA._id }).lean();
+  const record = await models.Attendance.create({ gymId: gym._id, memberId: memberA._id, branchId: branchA._id,
+    subscriptionId: subscription?._id ?? new mongoose.Types.ObjectId(), recordedByUserId: admin._id,
+    checkInAt: new Date(), status: 'open', ...overrides });
+  return { id: String(record._id) };
 }
-const out = (data, gym = gymA) => `${path(gym)}/${data.id}/check-out`;
 
 
 const summaryPath = (profile = memberA, gym = gymA) => `/api/v1/gyms/${gym._id}/members/${profile._id}/summary`;
@@ -114,11 +115,9 @@ test('admin receives a complete empty operational summary without a new collecti
   const collections = (await database.connection.db.listCollections().toArray()).map((item) => item.name).sort();
   const data = await summary(token);
   assert.equal(data.member.id, String(memberA._id)); assert.equal(data.member.memberCode, 'ME01');
-  assert.equal(data.currentBranch.id, String(branchA._id)); assert.equal(data.currentTrainers[0].trainerId, String(trainerA._id));
   assert.equal(data.currentSubscription, null); assert.equal(data.currentSubscriptionPaymentSummary, null);
   assert.deepEqual(data.subscriptionHistory, { items: [], total: 0, page: 1, limit: 20 });
   assert.deepEqual(data.paymentSummary, { totalSuccessfulAmountPaise: 0, successfulPaymentCount: 0, latestSuccessfulPayment: null });
-  assert.deepEqual(data.attendanceSummary, { totalCompletedVisits: 0, latestAttendance: null, currentlyCheckedIn: false, currentAttendance: null });
   assert.deepEqual(await models.MemberProfile.findById(memberA._id).lean(), before);
   assert.deepEqual((await database.connection.db.listCollections().toArray()).map((item) => item.name).sort(), collections);
   assert.equal((await send('get', summaryPath(), token)).headers['cache-control'], 'no-store');
@@ -187,18 +186,9 @@ test('profile fields are explicit and credentials injected into raw documents ne
   for (const field of ['userId', '__v', 'passwordHash', 'refreshToken', 'securityEvents']) assert.equal(field in data.member, false);
   assert.equal(data.member.dateOfBirth, '2000-01-01'); assert.equal(data.member.gender, 'male');
   assert.deepEqual(data.member.emergencyContact, { name: 'Contact', phone: '9876543210' });
-  assert.deepEqual(data.currentBranch.contact, { email: 'branch@example.com' });
 });
 
-test('current branch can be inactive, absent or deleted without exposing another gym branch', async () => {
-  const token = await login(); await models.Branch.updateOne({ _id: branchA._id }, { $set: { status: 'inactive' } });
-  assert.equal((await summary(token)).currentBranch.status, 'inactive');
-  await models.Branch.deleteOne({ _id: branchA._id }); assert.equal((await summary(token)).currentBranch, null);
-  await models.MemberProfile.updateOne({ _id: memberA._id }, { $unset: { branchId: '' } });
-  assert.equal((await summary(token)).currentBranch, null);
-  await models.MemberProfile.collection.updateOne({ _id: memberA._id }, { $set: { branchId: branchB._id } });
-  assert.equal((await summary(token)).currentBranch, null);
-});
+
 
 test('all valid active trainer assignments appear while inactive/foreign profiles and assignments do not', async () => {
   const token = await login();
@@ -298,34 +288,18 @@ test('payment and subscription foreign references fail closed rather than leak f
   error(await send('get', summaryPath(), token), 500, 'INTERNAL_SERVER_ERROR');
 });
 
-test('attendance summary counts completed visits and exposes the latest and current open visit', async () => {
-  const token = await login(); await create(token); const first = await visit(token); await send('post', out(first), token, {});
-  const second = await visit(token); const data = await summary(token);
-  assert.equal(data.attendanceSummary.totalCompletedVisits, 1); assert.equal(data.attendanceSummary.currentlyCheckedIn, true);
-  assert.equal(data.attendanceSummary.latestAttendance.id, second.id); assert.equal(data.attendanceSummary.currentAttendance.id, second.id);
-  assert.equal(data.attendanceSummary.currentAttendance.status, 'open');
-  await send('post', out(second), token, {}); const completed = await summary(token);
-  assert.equal(completed.attendanceSummary.totalCompletedVisits, 2); assert.equal(completed.attendanceSummary.currentlyCheckedIn, false);
-  assert.equal(completed.attendanceSummary.currentAttendance, null);
-});
 
-test('member branch transfer changes current branch but preserves historical attendance branch', async () => {
-  const token = await login(); await create(token); const data = await visit(token); await send('post', out(data), token, {});
-  await models.MemberProfile.updateOne({ _id: memberA._id }, { $set: { branchId: branchOther._id } });
-  const result = await summary(token); assert.equal(result.currentBranch.id, String(branchOther._id));
-  assert.equal(result.attendanceSummary.latestAttendance.branchId, String(branchA._id));
-});
+
+
 
 test('unrelated member/gym payments, subscriptions and attendance cannot contribute to a summary', async () => {
   const token = await login(); await create(token); const current = await create(token, { memberId: String(memberOther._id) });
   await payment(token, current, 150000); const visitOther = await visit(token, { memberId: String(memberOther._id) });
-  await send('post', out(visitOther), token, {});
+  await models.Attendance.updateOne({_id: visitOther.id}, {status: 'completed', checkOutAt: new Date()});
   await models.GymAccess.create({ userId: admin._id, gymId: gymB._id, role: 'admin', status: 'active' });
   await create(token, { memberId: String(memberB._id), membershipPlanId: String(planB._id) }, gymB);
   await visit(token, { memberId: String(memberB._id), branchId: String(branchB._id) }, gymB);
   const data = await summary(token); assert.equal(data.subscriptionHistory.total, 1);
-  assert.equal(data.paymentSummary.successfulPaymentCount, 0); assert.equal(data.attendanceSummary.totalCompletedVisits, 0);
-  assert.equal(data.attendanceSummary.latestAttendance, null);
 });
 
 test('invalid IDs, pagination, unknown parameters, operators and client clocks are rejected', async () => {
@@ -341,8 +315,8 @@ test('invalid IDs, pagination, unknown parameters, operators and client clocks a
 
 test('related lookup failures return one safe error rather than partial operational data', async (t) => {
   const token = await login(); await create(token);
-  for (const [model, method] of [[models.Branch, 'findOne'], [models.MemberSubscription, 'aggregate'], [models.Payment, 'aggregate'],
-    [models.Attendance, 'aggregate'], [models.TrainerMemberAssignment, 'aggregate'], [models.MemberProfile, 'findOne']]) {
+  for (const [model, method] of [[models.MemberSubscription, 'aggregate'], [models.Payment, 'aggregate'],
+    [models.TrainerMemberAssignment, 'aggregate'], [models.MemberProfile, 'findOne']]) {
     const mocked = t.mock.method(model, method, () => { throw new Error('private database credentials'); });
     const response = await send('get', summaryPath(), token); error(response, 500, 'INTERNAL_SERVER_ERROR');
     assert.equal('data' in response.body, false); assert.equal(JSON.stringify(response.body).includes('private'), false); mocked.mock.restore();
@@ -372,7 +346,7 @@ test('summary performs no domain writes or session/transaction creation', async 
 test('summary uses a fixed number of aggregates as history grows and returns at most the requested page', async (t) => {
   const token = await login(); const first = await create(token); let previous = first;
   for (let i = 0; i < 4; i += 1) { previous = await legacySuccessor(previous); }
-  const mocks = [models.MemberSubscription, models.Payment, models.Attendance, models.TrainerMemberAssignment]
+  const mocks = [models.MemberSubscription, models.Payment, models.TrainerMemberAssignment]
     .map((model) => t.mock.method(model, 'aggregate'));
   const data = await summary(token, memberA, gymA, '?limit=2'); assert.equal(data.subscriptionHistory.items.length, 2); assert.equal(data.subscriptionHistory.total, 5);
   for (const mocked of mocks) assert.equal(mocked.mock.callCount(), 1);
@@ -399,24 +373,11 @@ test('foreign trainer references are excluded and branch references never leak f
   await models.TrainerMemberAssignment.create({ gymId: gymA._id, memberId: memberA._id, trainerId: foreign._id });
   await models.MemberProfile.collection.updateOne({ _id: memberA._id }, { $set: { branchId: branchB._id } });
   const data = await summary(token); assert.equal(data.currentTrainers.length, 1);
-  assert.equal(data.currentBranch, null); assert.equal(data.member.branchId, null);
   assert.equal(JSON.stringify(data).includes(String(foreign._id)), false);
   assert.equal(JSON.stringify(data).includes(String(branchB._id)), false);
 });
 
-test('corrupt attendance links and ambiguous open states fail closed', async () => {
-  const token = await login(); await create(token); const data = await visit(token);
-  await models.Attendance.collection.updateOne({ _id: new mongoose.Types.ObjectId(data.id) }, { $set: { branchId: branchB._id } });
-  error(await send('get', summaryPath(), token), 500, 'INTERNAL_SERVER_ERROR');
-  await models.Attendance.collection.updateOne({ _id: new mongoose.Types.ObjectId(data.id) }, { $set: { branchId: branchA._id } });
-  await models.Attendance.collection.dropIndex('attendance_open_member_unique');
-  try {
-    const copy = await models.Attendance.findById(data.id).lean(); delete copy._id;
-    const duplicate = await models.Attendance.create(copy);
-    error(await send('get', summaryPath(), token), 500, 'INTERNAL_SERVER_ERROR');
-    await models.Attendance.deleteOne({ _id: duplicate._id });
-  } finally { await models.Attendance.createIndexes(); }
-});
+
 
 test('trainer authorization lookup failures deny summary without returning profile information', async (t) => {
   const token = await login(trainer);

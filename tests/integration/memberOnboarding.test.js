@@ -8,11 +8,13 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createMemberService } = require('../../src/modules/members/member.service');
-let isolated, database, config, models, app, gymA, gymB, branchA, branchB, admin, trainer, member, passwordHash;
+let isolated, database, config, models, app, gymA, gymB, admin, trainer, member, passwordHash;
 const password = randomBytes(24).toString('base64url');
 const missingId = () => String(new mongoose.Types.ObjectId());
 const path = (gym = gymA) => `/api/v1/gyms/${gym._id}/members`;
@@ -71,9 +73,6 @@ beforeEach(async () => {
     assign(user);
     await models.GymAccess.create({ userId: user._id, gymId: gymA._id, role, status: 'active' });
   }
-  const address = { line1: '123 Test Road', city: 'Test City', countryCode: 'IN' };
-  branchA = await models.Branch.create({ gymId: gymA._id, name: 'Branch A', nameKey: 'branch a', address });
-  branchB = await models.Branch.create({ gymId: gymB._id, name: 'Branch B', nameKey: 'branch b', address });
 });
 
 const onboarding = (gym = gymA) => `/api/v1/gyms/${gym._id}/member-onboarding`;
@@ -120,23 +119,17 @@ test('required fields, lengths and formats reuse existing member validation', as
   assert.equal(await models.MemberProfile.countDocuments(), 0);
 });
 test('optional fields and active branch return existing safe member DTO', async () => {
-  const token = await login(); const response = await send('post', onboarding(), token, input({ memberCode: ' gym001 ', branchId: String(branchA._id),
+  const token = await login(); const response = await send('post', onboarding(), token, input({ memberCode: ' gym001 ',
     dateOfBirth: '1995-06-12', gender: 'prefer_not_to_say', address: { line1: 'Home Road', line2: 'Suite 1', city: 'City', state: 'State', postalCode: '411001', countryCode: 'IN' },
     emergencyContact: { name: 'Pat', phone: '9876543211', relationship: 'Sibling' } }));
   assert.equal(response.status, 201); const data = response.body.data;
-  assert.deepEqual(Object.keys(data).sort(), ['id', 'gymId', 'branchId', 'memberCode', 'firstName', 'lastName', 'phone', 'dateOfBirth', 'gender', 'address', 'emergencyContact', 'status', 'createdAt', 'updatedAt'].sort());
-  assert.equal(data.memberCode, 'GYM001'); assert.equal(data.branchId, String(branchA._id)); assert.equal(data.dateOfBirth, '1995-06-12');
+  assert.deepEqual(Object.keys(data).sort(), ['id', 'gymId', 'memberCode', 'firstName', 'lastName', 'phone', 'dateOfBirth', 'gender', 'address', 'emergencyContact', 'status', 'createdAt', 'updatedAt'].sort());
+  assert.equal(data.memberCode, 'GYM001'); assert.equal(data.branchId, undefined); assert.equal(data.dateOfBirth, '1995-06-12');
   assert.equal(data.gender, 'prefer_not_to_say'); assert.equal(data.emergencyContact.name, 'Pat'); assert.equal(data.address.countryCode, 'IN');
   assert.equal(response.body.meta.requestId, response.headers['x-request-id']); assert.equal(response.headers['cache-control'], 'no-store');
   assert.doesNotMatch(JSON.stringify(data), /password|token|session|normalized|__v|"_id"|userId|role|permissions/i);
 });
-test('missing and foreign branches rejected; inactive branch rejected', async () => {
-  const token = await login();
-  for (const branchId of [missingId(), String(branchB._id)]) error(await send('post', onboarding(), token, input({ branchId })), 404, 'BRANCH_NOT_FOUND');
-  await models.Branch.updateOne({ _id: branchA._id }, { status: 'inactive' });
-  error(await send('post', onboarding(), token, input({ branchId: String(branchA._id) })), 403, 'FORBIDDEN');
-  assert.equal(await models.MemberProfile.countDocuments(), 0);
-});
+
 test('duplicate normalized member code conflicts without changing original member', async () => {
   const token = await login(); const data = await onboard(token); const before = await models.MemberProfile.findById(data.id).lean();
   error(await send('post', onboarding(), token, input({ memberCode: ' gym001 ', firstName: 'Changed' })), 409, 'DUPLICATE_MEMBER_CODE');
@@ -181,11 +174,11 @@ test('existing member creation/read/update behavior and cross-gym isolation rema
   error(await send('patch', `${path(gymB)}/${created.id}`, token, { firstName: 'Changed' }), 404, 'MEMBER_NOT_FOUND');
   const raw = await models.MemberProfile.findById(created.id); assert.equal(raw.memberCode, 'GYM002');
 });
-test('authorization, branch and insert failures fail safely without partial members', async (t) => {
+test('authorization and insert failures fail safely without partial members', async (t) => {
   const token = await login();
-  for (const [model, method] of [[models.GymAccess, 'findOne'], [models.Gym, 'findOne'], [models.Branch, 'findOne'], [models.MemberProfile, 'create']]) {
+  for (const [model, method] of [[models.GymAccess, 'findOne'], [models.Gym, 'findOne'], [models.MemberProfile, 'create']]) {
     const mock = t.mock.method(model, method, () => { throw new Error('private credentials'); });
-    const response = await send('post', onboarding(), token, input({ branchId: String(branchA._id) })); error(response, 500, 'INTERNAL_SERVER_ERROR');
+    const response = await send('post', onboarding(), token, input()); error(response, 500, 'INTERNAL_SERVER_ERROR');
     assert.doesNotMatch(JSON.stringify(response.body), /private credentials/); mock.mock.restore(); assert.equal(await models.MemberProfile.countDocuments(), 0);
   }
 });

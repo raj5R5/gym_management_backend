@@ -9,25 +9,19 @@ function parse(schema, value) {
 }
 function memberDto(member) {
   return { ...photoFields(member), id: String(member._id), gymId: String(member.gymId), userId: member.userId ? String(member.userId) : undefined,
-    branchId: member.branchId ? String(member.branchId) : undefined, memberCode: member.memberCode,
+    memberCode: member.memberCode,
     firstName: member.firstName, lastName: member.lastName, phone: member.phone,
     dateOfBirth: member.dateOfBirth ? member.dateOfBirth.toISOString().slice(0, 10) : undefined,
     gender: member.gender, address: member.address, emergencyContact: member.emergencyContact,
     status: member.status, createdAt: member.createdAt, updatedAt: member.updatedAt };
 }
-function createMemberService({ MemberProfile, Branch, UserAccount, authorizationService }) {
+function createMemberService({ MemberProfile, UserAccount, authorizationService }) {
   async function scope(auth, authorization, allowed) {
     // Re-resolve server-side access for service callers, never trust a body tenant/role.
     authorizationService.requireRoles(auth, authorization, allowed, authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
     authorizationService.requireRoles(auth, current, allowed, authorization.gymId);
     return current.gymId;
-  }
-  async function activeBranch(gymId, branchId, session) {
-    if (!branchId) return;
-    const branch = await Branch.findOne({ _id: branchId, gymId }).session(session ?? null).select('status').lean();
-    if (!branch) fail('BRANCH_NOT_FOUND');
-    if (branch.status !== 'active') fail('FORBIDDEN');
   }
   async function existing(gymId, memberId) {
     const id = parse(objectId, memberId);
@@ -46,19 +40,19 @@ function createMemberService({ MemberProfile, Branch, UserAccount, authorization
       if (!session?.inTransaction() || session.client !== MemberProfile.db.getClient()) fail('INVALID_TRANSACTION_CONTEXT');
       const gymId = await scope(auth, authorization, ['admin']);
       const data = parse(onboardMember, input);
-      await activeBranch(gymId, data.branchId, session);
+
       return insert(gymId, { ...data, status: 'active' }, undefined, session);
     },
     async onboard(auth, authorization, input) {
       const gymId = await scope(auth, authorization, ['admin', 'trainer']);
       const data = parse(onboardMember, input);
-      await activeBranch(gymId, data.branchId);
+
       return insert(gymId, { ...data, status: 'active' });
     },
     async create(auth, authorization, input, { linkedUserId } = {}) {
       const gymId = await scope(auth, authorization, ['admin']);
       const data = parse(createMember, input);
-      await activeBranch(gymId, data.branchId);
+
       // Reserved for trusted server callers; HTTP bodies cannot set this relationship.
       const userId = linkedUserId === undefined ? undefined : parse(objectId, linkedUserId);
       if (userId && !await UserAccount.exists({ _id: userId })) fail('USER_ACCOUNT_NOT_FOUND');
@@ -87,7 +81,7 @@ function createMemberService({ MemberProfile, Branch, UserAccount, authorization
       const gymId = await scope(auth, authorization, ['admin']);
       const data = parse(updateMember, input);
       await existing(gymId, memberId);
-      await activeBranch(gymId, data.branchId);
+
       const set = {}, unset = {};
       for (const [key, value] of Object.entries(data)) {
         if (value === null) unset[key] = ''; else set[key] = value;

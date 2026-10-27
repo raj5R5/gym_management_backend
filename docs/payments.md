@@ -1,3 +1,5 @@
+> Scope update (2026-10-26): branch/attendance contracts in this milestone document are historical. [Current MuscleDesk scope, compatibility and gym-calendar policy](scope-cleanup.md) supersedes them; gym-level security and remaining workflows are preserved.
+
 # Payments — Milestone 14
 
 Payment is an append-oriented financial record associated with a member's

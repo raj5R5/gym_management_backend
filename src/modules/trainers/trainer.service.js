@@ -8,25 +8,19 @@ function parse(schema, value) {
 }
 function trainerDto(trainer) {
   return { id: String(trainer._id), gymId: String(trainer.gymId), userId: trainer.userId ? String(trainer.userId) : undefined,
-    branchId: trainer.branchId ? String(trainer.branchId) : undefined, trainerCode: trainer.trainerCode,
+    trainerCode: trainer.trainerCode,
     firstName: trainer.firstName, lastName: trainer.lastName, phone: trainer.phone,
     dateOfBirth: trainer.dateOfBirth ? trainer.dateOfBirth.toISOString().slice(0, 10) : undefined,
     gender: trainer.gender, address: trainer.address, specializations: trainer.specializations,
     status: trainer.status, createdAt: trainer.createdAt, updatedAt: trainer.updatedAt };
 }
-function createTrainerService({ TrainerProfile, Branch, UserAccount, authorizationService }) {
+function createTrainerService({ TrainerProfile, UserAccount, authorizationService }) {
   async function scope(auth, authorization, allowed) {
     // Re-resolve server-side access for service callers, never trust a body tenant/role.
     authorizationService.requireRoles(auth, authorization, allowed, authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
     authorizationService.requireRoles(auth, current, allowed, authorization.gymId);
     return current.gymId;
-  }
-  async function activeBranch(gymId, branchId) {
-    if (!branchId) return;
-    const branch = await Branch.findOne({ _id: branchId, gymId }).select('status').lean();
-    if (!branch) fail('BRANCH_NOT_FOUND');
-    if (branch.status !== 'active') fail('FORBIDDEN');
   }
   async function existing(gymId, trainerId) {
     const id = parse(objectId, trainerId);
@@ -38,7 +32,7 @@ function createTrainerService({ TrainerProfile, Branch, UserAccount, authorizati
     async create(auth, authorization, input, { linkedUserId } = {}) {
       const gymId = await scope(auth, authorization, ['admin']);
       const data = parse(createTrainer, input);
-      await activeBranch(gymId, data.branchId);
+
       // Reserved for trusted server callers; HTTP bodies cannot set this relationship.
       const userId = linkedUserId === undefined ? undefined : parse(objectId, linkedUserId);
       if (userId && !await UserAccount.exists({ _id: userId })) fail('USER_ACCOUNT_NOT_FOUND');
@@ -69,7 +63,7 @@ function createTrainerService({ TrainerProfile, Branch, UserAccount, authorizati
       const gymId = await scope(auth, authorization, ['admin']);
       const data = parse(updateTrainer, input);
       await existing(gymId, trainerId);
-      await activeBranch(gymId, data.branchId);
+
       const set = {}, unset = {};
       for (const [key, value] of Object.entries(data)) {
         if (value === null) unset[key] = ''; else set[key] = value;

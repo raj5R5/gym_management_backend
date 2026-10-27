@@ -8,7 +8,9 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createSubscriptionService } = require('../../src/modules/subscriptions/subscription.service');
@@ -445,4 +447,23 @@ test('cancelled membership permits a new purchase while preserving its unpaid hi
   const historical = await models.MemberSubscription.findById(first.id).lean();
   assert.equal(historical.status, 'cancelled'); assert.equal(historical.pricePaiseSnapshot, 150000);
   assert.equal(await models.Payment.countDocuments(), 0);
+});
+
+test('configured gym calendar controls purchase validation, lifecycle and renewal preview', async () => {
+  await login();
+  await models.Gym.updateOne({_id: gymA._id}, {'settings.timezone': 'Asia/Kolkata'});
+  const auth = {user: admin, session: await models.AuthSession.findOne({userId: admin._id}).lean()};
+  const authorizationService = createAuthorizationService(models);
+  const selected = await authorizationService.requireGymAccess(auth, String(gymA._id));
+  let now = new Date('2026-10-26T19:00:00Z'); // Oct 27 in Kolkata, still Oct 26 UTC
+  const service = createSubscriptionService({...models, authorizationService, clock: () => now});
+  const record = await service.create(auth, selected, {memberId: String(memberA._id), membershipPlanId: String(planA._id), startDate: '2026-10-27'});
+  assert.equal(record.isCurrentlyActive, true);
+  assert.equal(record.endDate, '2026-11-26');
+  await assert.rejects(service.create(auth, selected, {memberId: String(memberOther._id), membershipPlanId: String(planA._id), startDate: '2026-10-28'}), {code: 'VALIDATION_ERROR'});
+  now = new Date('2026-11-25T19:00:00Z'); // exclusive end reached locally
+  assert.equal((await service.get(auth, selected, record.id)).status, 'expired');
+  const preview = await service.renewalPreview(auth, selected, record.id);
+  assert.equal(preview.calendarTimezone, 'Asia/Kolkata');
+  assert.equal(preview.terms.startDate, '2026-11-26');
 });

@@ -1,3 +1,5 @@
+> Scope update (2026-10-26): branch/attendance contracts in this milestone document are historical. [Current MuscleDesk scope, compatibility and gym-calendar policy](scope-cleanup.md) supersedes them; gym-level security and remaining workflows are preserved.
+
 # Gym operations dashboard
 
 `GET /api/v1/gyms/:gymId/dashboard` is a read-only operational summary. It requires an authenticated active account/session, active GymAccess, an active gym, and an explicit **admin** role in that gym. Trainers and members are denied. Bootstrap provisioning does not grant dashboard access. Responses use `Cache-Control: no-store`.

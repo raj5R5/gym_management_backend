@@ -8,7 +8,9 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createMemberSummaryService } = require('../../src/modules/memberSummary/summary.service');
@@ -18,7 +20,6 @@ let isolated, database, config, models, app, gymA, gymB, admin, trainer, member,
 const password = randomBytes(24).toString('base64url');
 const missingId = () => String(new mongoose.Types.ObjectId());
 const subscriptionPath = (gym = gymA) => `/api/v1/gyms/${gym._id}/subscriptions`;
-const path = (gym = gymA) => `/api/v1/gyms/${gym._id}/attendance`;
 const day = (offset = 0) => { const value = new Date(); value.setUTCDate(value.getUTCDate() + offset); return value.toISOString().slice(0, 10); };
 const input = (overrides = {}) => ({ memberId: String(memberA._id), membershipPlanId: String(planA._id), startDate: day(), ...overrides });
 function error(response, status, code) {
@@ -92,12 +93,13 @@ beforeEach(async () => {
   planB = await models.MembershipPlan.create({ ...plan, gymId: gymB._id });
 });
 
-const checkInInput = (overrides = {}) => ({ memberId: String(memberA._id), branchId: String(branchA._id), ...overrides });
-async function visit(token, overrides = {}, gym = gymA) {
-  const response = await send('post', `${path(gym)}/check-in`, token, checkInInput(overrides));
-  assert.equal(response.status, 201, JSON.stringify(response.body)); return response.body.data;
+async function visit(_token, overrides = {}, gym = gymA) {
+  const subscription = await models.MemberSubscription.findOne({ gymId: gym._id, memberId: memberA._id }).lean();
+  const record = await models.Attendance.create({ gymId: gym._id, memberId: memberA._id, branchId: branchA._id,
+    subscriptionId: subscription?._id ?? new mongoose.Types.ObjectId(), recordedByUserId: admin._id,
+    checkInAt: new Date(), status: 'open', ...overrides });
+  return { id: String(record._id) };
 }
-const out = (data, gym = gymA) => `${path(gym)}/${data.id}/check-out`;
 
 
 async function payment(token, subscription, amountPaise, overrides = {}) {
@@ -107,20 +109,20 @@ async function payment(token, subscription, amountPaise, overrides = {}) {
   assert.equal(response.status, 201, JSON.stringify(response.body)); return response.body.data;
 }
 
-const kinds = ['profile', 'membership', 'payments', 'attendance', 'trainers'];
+const kinds = ['profile', 'membership', 'payments', 'trainers'];
 const selfPath = (kind, gym = gymA) => `/api/v1/me/gyms/${gym._id}/${kind}`;
 async function read(kind, token, query = '', gym = gymA) {
   const response = await send('get', selfPath(kind, gym)+query, token); assert.equal(response.status, 200, JSON.stringify(response.body.error));
   assert.equal(response.headers['cache-control'], 'no-store'); assert.equal(response.body.meta.requestId, response.headers['x-request-id']); return response.body;
 }
-test('active linked member can read all five self-service endpoints using existing envelopes', async () => {
+test('active linked member can read all four remaining self-service endpoints using existing envelopes', async () => {
   const token = await login(member); const profile = await read('profile', token);
   assert.equal(profile.data.member.id, String(memberA._id)); assert.equal(profile.data.member.memberCode, 'ME01');
-  assert.equal(profile.data.currentBranch.id, String(branchA._id));
+  assert.equal(profile.data.currentBranch, undefined);
   const membership = await read('membership', token); assert.deepEqual(membership.data, { currentMembership: null, subscriptions: [] });
   assert.deepEqual(membership.meta.pagination, { page: 1, limit: 20, total: 0 });
   const payments = await read('payments', token); assert.deepEqual(payments.data, { payments: [], totalSuccessfulPaidPaise: 0 });
-  assert.deepEqual((await read('attendance', token)).data, []);
+  error(await send('get', selfPath('attendance'), token), 404, 'NOT_FOUND');
   assert.equal((await read('trainers', token)).data[0].trainerId, String(trainerA._id));
 });
 test('provisioned and activated member logs in and resolves the newly linked self identity', async () => {
@@ -179,7 +181,8 @@ test('one global account resolves independent member profiles/data in two gyms a
     assert.equal((await read('profile', token, '', gym)).data.member.id, String(person._id));
     assert.deepEqual((await read('membership', token, '', gym)).data.subscriptions.map((row) => row.id), [sub.id]);
     assert.equal((await read('payments', token, '', gym)).data.totalSuccessfulPaidPaise, amount);
-    assert.deepEqual((await read('attendance', token, '', gym)).data.map((row) => row.id), [attendanceId]);
+    error(await send('get', selfPath('attendance', gym), token), 404, 'NOT_FOUND');
+    assert.ok(attendanceId); // historical fixture exists but has no active endpoint
     assert.deepEqual((await read('trainers', token, '', gym)).data.map((row) => row.trainerId), [String(trainerId)]);
   }
   const third = await models.Gym.create({ name: 'Gym C', nameKey: 'gym c', status: 'active' });
@@ -211,7 +214,7 @@ test('profile DTO allows own personal information while stripping nested interna
   assert.equal(result.data.member.dateOfBirth, '2000-01-01'); assert.equal(result.data.member.address.city, 'Pune'); assert.equal(result.data.member.emergencyContact.name, 'Contact');
   assert.doesNotMatch(JSON.stringify(result), /password|token|session|userId|gymAccess|must-not-leak|__v|"_id"/i);
   await models.MemberProfile.collection.updateOne({ _id: memberA._id }, { $set: { branchId: branchB._id } });
-  const foreign = await read('profile', token); assert.equal(foreign.data.member.branchId, null); assert.equal(foreign.data.currentBranch, null);
+  const foreign = await read('profile', token); assert.equal(foreign.data.member.branchId, undefined); assert.equal(foreign.data.currentBranch, undefined);
 });
 test('membership uses immutable snapshots and exclusive UTC boundaries across past, current, future and cancelled periods', async () => {
   const adminToken = await login(); const cancelled = await create(adminToken, { startDate: day(-90) });
@@ -248,24 +251,14 @@ test('corrupt foreign-subscription references or fractional payments fail closed
     await models.Payment.collection.updateOne({ _id: new mongoose.Types.ObjectId(paid.id) }, { $set: { subscriptionId: new mongoose.Types.ObjectId(sub.id), amountPaise: 101 } });
   }
 });
-test('attendance preserves stored historical branches and represents open/completed durations without writes', async () => {
-  const adminToken = await login(); await create(adminToken); const first = await visit(adminToken);
-  const completed = await send('post', out(first), adminToken, {}); assert.equal(completed.status, 200);
-  await models.MemberProfile.updateOne({ _id: memberA._id }, { branchId: branchOther._id });
-  const open = await visit(adminToken, { branchId: String(branchOther._id) }); const token = await login(member);
-  const result = await read('attendance', token); assert.deepEqual(result.data.map((row) => row.id), [open.id, first.id]);
-  assert.equal(result.data[0].status, 'open'); assert.equal(result.data[0].durationMs, null); assert.equal(result.data[0].checkOutAt, null);
-  assert.equal(result.data[1].branchId, String(branchA._id)); assert.equal(result.data[1].status, 'completed'); assert.ok(Number.isSafeInteger(result.data[1].durationMs));
-  assert.doesNotMatch(JSON.stringify(result), /recordedBy|memberId|userId|session|token/);
-});
+
 test('only active own assignments to active same-gym trainers are exposed with allowlisted DTOs', async () => {
   const adminToken = await login(); const other = await models.TrainerProfile.create({ gymId: gymA._id, trainerCode: 'TR02', firstName: 'Other', lastName: 'Trainer', phone: '9876543210', branchId: branchOther._id, specializations: ['Strength'] });
   const next = await models.TrainerMemberAssignment.create({ gymId: gymA._id, trainerId: other._id, memberId: memberA._id });
   await models.TrainerMemberAssignment.create({ gymId: gymA._id, trainerId: trainerA._id, memberId: memberOther._id });
   const token = await login(member); const result = await read('trainers', token);
   assert.equal(result.data.length, 2); const row = result.data.find((value) => value.assignmentId === String(next._id));
-  assert.equal(row.branchId, String(branchOther._id)); assert.deepEqual(row.specializations, ['Strength']);
-  assert.deepEqual(Object.keys(row).sort(), ['trainerId','trainerCode','firstName','lastName','phone','specializations','branchId','assignmentId','assignedAt'].sort());
+  assert.deepEqual(Object.keys(row).sort(), ['trainerId','trainerCode','firstName','lastName','phone','specializations','assignmentId','assignedAt'].sort());
   await send('patch', `/api/v1/gyms/${gymA._id}/trainer-assignments/${assignment._id}/deactivate`, adminToken, {});
   assert.deepEqual((await read('trainers', token)).data.map((value) => value.assignmentId), [String(next._id)]);
   await models.TrainerProfile.updateOne({ _id: other._id }, { status: 'inactive' }); assert.deepEqual((await read('trainers', token)).data, []);
@@ -292,7 +285,7 @@ test('all history views remain bounded when the member has more than 100 records
     trainerCode: 'B'+index, firstName: 'Assigned', lastName: 'Trainer', phone: '9876543210' })));
   await models.TrainerMemberAssignment.insertMany(trainers.map((profile) => ({ gymId: gymA._id, memberId: memberA._id, trainerId: profile._id })));
   const token = await login(member);
-  for (const kind of ['membership','payments','attendance','trainers']) {
+  for (const kind of ['membership','payments','trainers']) {
     const rows = (response) => kind === 'membership' ? response.data.subscriptions : kind === 'payments' ? response.data.payments : response.data;
     assert.equal(rows(await read(kind, token)).length, 20);
     const max = await read(kind, token, '?limit=100'); assert.equal(rows(max).length, 100); assert.ok(max.meta.pagination.total > 100);
@@ -306,14 +299,14 @@ test('membership, payment, attendance and trainer ordering/pagination are determ
   const historical = await models.MemberSubscription.create({ ...raw, status: 'cancelled', cancelledAt: new Date() });
   const paymentOne = await payment(adminToken, sub, 101); const paymentTwo = await payment(adminToken, sub, 202);
   const fixed = new Date('2025-01-01T00:00:00Z'); await models.Payment.collection.updateMany({}, { $set: { paidAt: fixed } });
-  const visits = await models.Attendance.create([0, 1].map(() => ({ gymId: gymA._id, memberId: memberA._id, branchId: branchA._id, subscriptionId: sub.id,
+  await models.Attendance.create([0, 1].map(() => ({ gymId: gymA._id, memberId: memberA._id, branchId: branchA._id, subscriptionId: sub.id,
     status: 'completed', checkInAt: fixed, checkOutAt: new Date(fixed.getTime()+1000), recordedByUserId: admin._id })));
   const other = await models.TrainerProfile.create({ gymId: gymA._id, trainerCode: 'TR02', firstName: 'Other', lastName: 'Trainer', phone: '9876543210' });
   const assigned = await models.TrainerMemberAssignment.create({ gymId: gymA._id, trainerId: other._id, memberId: memberA._id });
   await models.TrainerMemberAssignment.collection.updateMany({}, { $set: { assignedAt: fixed } });
   const token = await login(member);
   for (const [kind, ids, field] of [['membership', [sub.id,String(historical._id)], 'id'], ['payments', [paymentOne.id,paymentTwo.id], 'id'],
-    ['attendance', visits.map((value) => String(value._id)), 'id'], ['trainers', [String(assigned._id),String(assignment._id)], 'assignmentId']]) {
+    ['trainers', [String(assigned._id),String(assignment._id)], 'assignmentId']]) {
     const one = await read(kind, token, '?page=1&limit=1'); const two = await read(kind, token, '?page=2&limit=1');
     const rows = (response) => kind === 'membership' ? response.data.subscriptions : kind === 'payments' ? response.data.payments : response.data;
     assert.deepEqual([...rows(one),...rows(two)].map((value) => value[field]), ids.sort().reverse()); assert.equal(one.meta.pagination.total, 2);
@@ -324,7 +317,7 @@ test('membership, payment, attendance and trainer ordering/pagination are determ
 test('database authorization/profile/domain failures fail safely with no partial private data', async (t) => {
   const token = await login(member);
   for (const [model, method, kind] of [[models.GymAccess,'findOne','profile'],[models.Gym,'findOne','profile'],[models.MemberProfile,'find','profile'],
-    [models.Branch,'findOne','profile'],[models.MemberSubscription,'aggregate','membership'],[models.Payment,'aggregate','payments'],[models.Attendance,'aggregate','attendance'],[models.TrainerMemberAssignment,'aggregate','trainers']]) {
+    [models.MemberSubscription,'aggregate','membership'],[models.Payment,'aggregate','payments'],[models.TrainerMemberAssignment,'aggregate','trainers']]) {
     const mock = t.mock.method(model, method, () => { throw new Error('private storage credentials'); });
     const response = await send('get', selfPath(kind), token); error(response, 500, 'INTERNAL_SERVER_ERROR'); assert.doesNotMatch(JSON.stringify(response.body), /private storage credentials/); mock.mock.restore();
   }
@@ -332,11 +325,11 @@ test('database authorization/profile/domain failures fail safely with no partial
 test('self-service reads never write and use fixed aggregation counts without N+1 queries', async (t) => {
   const adminToken = await login(); const sub = await create(adminToken); await payment(adminToken, sub, 101); await visit(adminToken); const token = await login(member);
   let calls = 0;
-  for (const model of [models.MemberSubscription, models.Payment, models.Attendance, models.TrainerMemberAssignment]) {
+  for (const model of [models.MemberSubscription, models.Payment, models.TrainerMemberAssignment]) {
     const original = model.aggregate; t.mock.method(model, 'aggregate', function (...args) { calls++; return original.apply(this,args); });
   }
   for (const model of Object.values(models)) for (const method of ['create','updateOne','updateMany','findOneAndUpdate','deleteOne','deleteMany']) t.mock.method(model, method, () => { throw new Error('Unexpected write'); });
-  for (const kind of kinds) await read(kind, token); assert.equal(calls, 4);
+  for (const kind of kinds) await read(kind, token); assert.equal(calls, 3);
 });
 test('service rechecks missing/stale scope and fails closed without a configured resolver', async () => {
   await login(member); const { auth, authorization } = await context();

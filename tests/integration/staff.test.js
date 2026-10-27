@@ -8,7 +8,9 @@ const { testAuthEnv } = require('../helpers/authConfig');
 const { loadConfig } = require('../../src/config/env');
 const { createDatabase } = require('../../src/config/database');
 const { createLogger } = require('../../src/config/logger');
-const { createApp, createBootstrapApp } = require('../../src/app');
+const { createApp: createRuntimeApp, createBootstrapApp } = require('../../src/app');
+const { historicalRecords } = require('../helpers/historicalRecords');
+const createApp = (options) => { const app = createRuntimeApp(options); historicalRecords(options.database?.connection); return app; };
 const { initializePasswords, hashPassword, verifyPassword } = require('../../src/modules/auth/password');
 const { createAuthorizationService } = require('../../src/modules/authorization/authorization.service');
 const { createStaffService } = require('../../src/modules/staff/staff.service');
@@ -186,7 +188,7 @@ test('display name is global but role/status updates affect only the selected gy
 for (const status of ['inactive', 'suspended']) test(`staff ${status} blocks gym authorization and can be reactivated`, async () => {
   const token = await login(); const trainerToken = await login(trainer);
   assert.equal((await send('patch', `${path()}/${trainer._id}`, token, { status })).status, 200);
-  error(await send('get', `/api/v1/gyms/${gymA._id}/attendance`, trainerToken), 403, 'FORBIDDEN');
+  error(await send('get', `/api/v1/gyms/${gymA._id}/members`, trainerToken), 403, 'FORBIDDEN');
   assert.equal((await send('patch', `${path()}/${trainer._id}`, token, { status: 'active' })).status, 200);
   assert.equal((await models.GymAccess.findOne({ userId: trainer._id })).status, 'active');
 });

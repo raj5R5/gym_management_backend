@@ -39,7 +39,7 @@ function createPaymentService({ Gym, Payment, MemberSubscription, MemberProfile,
     const gymId = new Types.ObjectId(selected.gymId);
     const stages = [
       { $lookup: { from: MemberProfile.collection.name, localField: 'memberId', foreignField: '_id',
-        pipeline: [{ $match: { gymId, ...(selected.branchId ? { branchId: selected.branchId } : {}) } }, { $project: includeMember ? { _id: 1, gymId: 1, branchId: 1, firstName: 1, lastName: 1, phone: 1, memberCode: 1, status: 1 } : { _id: 1 } }], as: 'member' } }, { $unwind: '$member' },
+        pipeline: [{ $match: { gymId } }, { $project: includeMember ? { _id: 1, gymId: 1, firstName: 1, lastName: 1, phone: 1, memberCode: 1, status: 1 } : { _id: 1 } }], as: 'member' } }, { $unwind: '$member' },
       { $lookup: { from: MemberSubscription.collection.name, let: { subscriptionId: '$subscriptionId', memberId: '$memberId' },
         pipeline: [{ $match: { gymId, $expr: { $and: [{ $eq: ['$_id', '$$subscriptionId'] }, { $eq: ['$memberId', '$$memberId'] }] } } },
           { $project: { _id: 1 } }], as: 'subscription' } }, { $unwind: '$subscription' },
@@ -149,16 +149,12 @@ function createPaymentService({ Gym, Payment, MemberSubscription, MemberProfile,
     async get(auth, authorization, paymentId) { return dto(await existing(await readScope(auth, authorization), paymentId)); },
     async list(auth, authorization, query) {
       const selected = await readScope(auth, authorization);
-      const { page, limit, memberId, subscriptionId, status, paymentMethod, paidFrom, paidTo, from, to, branchId, includeMember } = parse(paymentListInput, query);
-      if (branchId) {
-        await authorizationService.requireBranchAccess(auth, authorization, selected.gymId, branchId);
-        selected.branchId = new Types.ObjectId(branchId);
-      }
+      const { page, limit, memberId, subscriptionId, status, paymentMethod, paidFrom, paidTo, from, to, includeMember } = parse(paymentListInput, query);
       let period;
       if (from || to) {
         const gym = await Gym.findOne({ _id: selected.gymId, status: 'active' }).select('settings.timezone').lean();
         if (!gym) fail('FORBIDDEN');
-        period = await dashboardPeriod(Gym, new Types.ObjectId(selected.gymId), gym.settings?.timezone ?? 'UTC', { from, to, branchId }, new Date());
+        period = await dashboardPeriod(Gym, new Types.ObjectId(selected.gymId), gym.settings?.timezone ?? 'UTC', { from, to }, new Date());
       }
       const filter = { gymId: new Types.ObjectId(selected.gymId), ...(memberId ? { memberId: new Types.ObjectId(memberId) } : {}),
         ...(subscriptionId ? { subscriptionId: new Types.ObjectId(subscriptionId) } : {}), ...(status ? { status } : {}), ...(paymentMethod ? { paymentMethod } : {}) };
