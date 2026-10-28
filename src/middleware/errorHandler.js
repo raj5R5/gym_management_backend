@@ -1,4 +1,8 @@
 const publicErrors = {
+  INVALID_RECOVERY_CREDENTIAL: [401, 'Recovery code is invalid or expired. Request a new code.'],
+  PASSWORD_RECOVERY_UNAVAILABLE: [503, 'Account recovery delivery is unavailable. Retry later or contact support.'],
+  PASSWORD_RECOVERY_STORAGE_UNAVAILABLE: [503, 'The password change could not be confirmed. Try signing in before requesting another code.'],
+  MINOR_MEMBER_WORKFLOW_UNAVAILABLE: [409, 'Under-18 registration, profile changes and photo uploads are unavailable until guardian authorization and verification are supported.'],
   ACCOUNT_DELETION_PASSWORD_INVALID: [400, 'The current password is incorrect. No new deletion request was saved.'],
   PROFILE_PASSWORD_REQUIRED: [400, 'Enter your current password to change the sign-in email.'],
   PROFILE_PASSWORD_INVALID: [400, 'The current password is incorrect. No profile changes were saved.'],

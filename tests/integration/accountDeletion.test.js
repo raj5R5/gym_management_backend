@@ -69,12 +69,47 @@ test('a supplied foreign user ID/status is rejected and accounts cannot read ano
 test('external page works without an installed app, authenticates the password and returns the same request', async () => {
   const page = await request(app).get('/account-deletion');
   assert.equal(page.status, 200); assert.match(page.text, /type="password"/);
+  assert.match(page.text, /<title>MuscleDesk · Account deletion<\/title>/);
+  assert.match(page.text, /<h1>MuscleDesk · Account deletion<\/h1>/);
+  assert.doesNotMatch(page.text, /Gym Management/);
+  assert.match(page.text, /Cannot log in\?/);
+  assert.match(page.text, /href="mailto:pcterajbca7772@gmail\.com\?subject=MuscleDesk%20account%20deletion%20request"/);
+  assert.match(page.text, /href="\/privacy-policy"/);
+  assert.match(page.text, /Ownership must be verified/);
+  assert.match(page.text, /does not automatically delete/);
+  assert.match(page.text, /Do not send passwords, recovery codes/);
+  assert.match(page.text, /action="\/account-deletion"/);
+  assert.equal(await models.AccountDeletionRequest.countDocuments(), 0);
+  assert.equal(page.headers['cache-control'], 'no-store');
   assert.match(page.headers['content-security-policy'], /default-src 'self'/);
   const r = await request(app).post('/account-deletion').type('form').send({ email: user.email, ...body() });
   assert.equal(r.status, 202); assert.match(r.text, /Account deletion has not been confirmed/);
+  assert.match(r.text, /MuscleDesk · Account deletion/);
+  assert.match(r.text, /href="\/privacy-policy"/);
+  assert.match(r.text, /mailto:pcterajbca7772@gmail\.com/);
+  assert.doesNotMatch(r.text, /Gym Management/);
+  assert.equal(r.headers['cache-control'], 'no-store');
   const receipt = (await auth(request(app).get(endpoint))).body.data.request;
   assert.ok(r.text.includes(receipt.id));
   assert.equal(r.text.includes(user.email), false); assert.equal(r.text.includes(password), false);
+});
+test('public page HEAD, stylesheet and privacy navigation are read-only and require no login', async () => {
+  const head = await request(app).head('/account-deletion');
+  assert.equal(head.status, 200);
+  assert.equal(head.text, undefined);
+  assert.equal(head.headers['cache-control'], 'no-store');
+  assert.equal(head.headers['set-cookie'], undefined);
+  const css = await request(app).get('/account-deletion/style.css');
+  assert.equal(css.status, 200);
+  assert.match(css.headers['content-type'], /text\/css/);
+  assert.equal(css.headers['cache-control'], 'no-store');
+  assert.match(css.text, /prefers-color-scheme:light/);
+  const policy = await request(app).get('/privacy-policy');
+  assert.equal(policy.status, 200);
+  assert.match(policy.text, /href="\/account-deletion"/);
+  assert.match(policy.text, /DRAFT — NOT APPROVED FOR PUBLICATION/);
+  assert.equal(await models.AccountDeletionRequest.countDocuments(), 0);
+  assert.equal(await models.UserAccount.countDocuments(), 1);
 });
 test('external nonexistent account and wrong password use the same generic error', async () => {
   for (const input of [{ email: 'absent@example.test', ...body() }, { email: user.email, ...body(), currentPassword: 'incorrect' }]) {

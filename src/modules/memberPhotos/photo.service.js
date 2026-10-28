@@ -2,6 +2,8 @@ const { createHash, randomUUID } = require('node:crypto');
 const { objectId } = require('../gyms/gym.validation');
 const { preparePhoto, fail } = require('./photo.image');
 const { photoFields } = require('./photo.dto');
+const { requireAdultMember } = require('../members/member.age');
+const { gymCalendar } = require('../gymDashboard/dashboard.period');
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const digestOf = (value) => createHash('sha256').update(value).digest('hex');
 const leaseMs = 5 * 60_000;
@@ -34,6 +36,11 @@ function createPhotoService({ MemberProfile, PhotoOperation, PhotoCleanup, autho
     const digest = digestOf(kind === 'upload' ? file.buffer : 'remove');
     const id = digestOf(`${member.gymId}:${memberId}:${operationKey}`);
     let operation = await PhotoOperation.findById(id).lean();
+    // Preserve committed receipts; block new/unfinished minor uploads before
+    // provider dispatch. Removal remains available to reduce retained data.
+    if (kind === 'upload' && operation?.state !== 'committed' && !accessOverride && member.dateOfBirth) {
+      requireAdultMember(member.dateOfBirth, (await gymCalendar(MemberProfile.db.models.Gym, member.gymId, now())).label);
+    }
     if (!operation) {
       try {
         operation = (await PhotoOperation.create({ _id: id, gymId: member.gymId, memberId,

@@ -4,6 +4,7 @@ const { accountStatuses, normalizeEmail } = require('./userAccount.validation');
 const userAccountSchema = new Schema({
   email: { type: String, required: true, trim: true, maxlength: 254 },
   passwordHash: { type: String, select: false },
+  credentialVersion: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
   normalizedEmail: { type: String, required: true, select: false },
   displayName: { type: String, trim: true, minlength: 1, maxlength: 120 },
   status: { type: String, enum: accountStatuses, required: true, default: 'inactive' },

@@ -54,7 +54,7 @@ function createAuthService({ UserAccount, GymAccess, Gym, AuthSession, RefreshTo
       const raw = freshRefreshToken();
       const expiresAt = new Date(now.getTime() + config.sessionTtl * 1000);
       const idleExpiresAt = new Date(Math.min(expiresAt.getTime(), now.getTime() + config.refreshTokenTtl * 1000));
-      const session = await AuthSession.create({ userId: user._id, clientType: client,
+      const session = await AuthSession.create({ userId: user._id, clientType: client, credentialVersion: user.credentialVersion ?? 0,
         currentTokenHash: digestToken(raw), expiresAt, idleExpiresAt, lastUsedAt: now });
       try {
         await RefreshTokenRecord.create({ sessionId: session._id, tokenHash: digestToken(raw),
@@ -78,7 +78,7 @@ function createAuthService({ UserAccount, GymAccess, Gym, AuthSession, RefreshTo
       if (record.revokedAt || record.expiresAt <= now || session.status !== 'active'
         || session.expiresAt <= now || session.idleExpiresAt <= now) throw denied();
       const user = await UserAccount.findById(session.userId).lean();
-      if (!user || user.status !== 'active') { await revoke(session._id, audit, 'account_inactive'); throw denied(); }
+      if (!user || user.status !== 'active' || (user.credentialVersion ?? 0) !== (session.credentialVersion ?? 0)) { await revoke(session._id, audit, 'account_changed'); throw denied(); }
       const replacement = freshRefreshToken();
       const replacementHash = digestToken(replacement);
       const expiresAt = new Date(Math.min(session.expiresAt.getTime(), now.getTime() + config.refreshTokenTtl * 1000));
@@ -104,7 +104,7 @@ function createAuthService({ UserAccount, GymAccess, Gym, AuthSession, RefreshTo
       const session = await AuthSession.findOne({ _id: claims.sid, userId: claims.sub,
         status: 'active', expiresAt: { $gt: now }, idleExpiresAt: { $gt: now } }).lean();
       const user = session && await UserAccount.findById(claims.sub).lean();
-      if (!user || user.status !== 'active') throw denied();
+      if (!user || user.status !== 'active' || (user.credentialVersion ?? 0) !== (session.credentialVersion ?? 0)) throw denied();
       return { user, session };
     },
     async me(context) { return identity(context.user); },

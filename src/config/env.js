@@ -35,6 +35,10 @@ function proxyAddress(value) {
 }
 
 const envSchema = z.object({
+  RECOVERY_SMTP_USER: z.email().max(254).optional().or(z.literal('')),
+  RECOVERY_SMTP_PASSWORD: z.string().min(1).max(512).optional().or(z.literal('')),
+  RECOVERY_EMAIL_FROM: z.email().max(254).optional().or(z.literal('')),
+  RECOVERY_TOKEN_TTL_SECONDS: seconds(900, 1800),
   API_BIND_HOST: z.string().refine((value) => Boolean(isIP(value))).optional(),
   TRUSTED_PROXIES: z.string().default('').transform((value) =>
     value.split(',').map((address) => address.trim()).filter(Boolean)
@@ -82,6 +86,9 @@ function loadConfig(environment = process.env) {
     throw error;
   }
   return Object.freeze({
+    recovery: Object.freeze({ user: result.data.RECOVERY_SMTP_USER,
+      password: result.data.RECOVERY_SMTP_PASSWORD, from: result.data.RECOVERY_EMAIL_FROM,
+      ttl: result.data.RECOVERY_TOKEN_TTL_SECONDS }),
     cloudinary: Object.freeze({ cloudName: result.data.CLOUDINARY_CLOUD_NAME,
       apiKey: result.data.CLOUDINARY_API_KEY, apiSecret: result.data.CLOUDINARY_API_SECRET }),
     jwtAccessSecret: result.data.JWT_ACCESS_SECRET,

@@ -1,3 +1,5 @@
+const { requireAdultMember } = require('../members/member.age');
+const { gymCalendar } = require('../gymDashboard/dashboard.period');
 const { randomBytes, createHash } = require('node:crypto');
 const { objectId } = require('../gyms/gym.validation');
 const { normalizeEmail } = require('../userAccounts/userAccount.validation');
@@ -43,7 +45,7 @@ function createMemberAccountService({ MemberProfile, UserAccount, GymAccess, Gym
     const id = parse(objectId, memberId);
     const query = lock ? MemberProfile.findOneAndUpdate({ _id: id, gymId }, { $inc: { __v: 1 } },
       { session, timestamps: false, returnDocument: 'after' }) : MemberProfile.findOne({ _id: id, gymId }).session(session ?? null);
-    const record = await query.select('_id userId status').lean(); if (!record) fail('MEMBER_NOT_FOUND'); return record;
+    const record = await query.select('_id userId status dateOfBirth').lean(); if (!record) fail('MEMBER_NOT_FOUND'); return record;
   }
   async function linked(gymId, record, session) {
     if (!record.userId) return { user: null, access: null };
@@ -65,6 +67,7 @@ function createMemberAccountService({ MemberProfile, UserAccount, GymAccess, Gym
         await lockAdmin(auth, selected, session);
         const record = await member(selected.gymId, memberId, session, true);
         if (record.status !== 'active') fail('FORBIDDEN');
+        if (record.dateOfBirth) requireAdultMember(record.dateOfBirth, (await gymCalendar(Gym, selected.gymId, new Date(), session)).label);
         let user = await UserAccount.findOne({ normalizedEmail: normalizeEmail(data.email) }).select('email displayName status +passwordHash').session(session).lean();
         if (record.userId && (!user || String(record.userId) !== String(user._id))) fail('MEMBER_ACCOUNT_IDENTITY_CONFLICT');
         if (user && (!record.userId || String(record.userId) !== String(user._id))) fail('MEMBER_ACCOUNT_IDENTITY_CONFLICT');
@@ -114,7 +117,8 @@ function createMemberAccountService({ MemberProfile, UserAccount, GymAccess, Gym
         if (!credential) fail('INVALID_ACTIVATION_CREDENTIAL');
         await lockGym(credential.gymId, session, 'INVALID_ACTIVATION_CREDENTIAL');
         const record = await MemberProfile.findOneAndUpdate({ _id: credential.memberId, gymId: credential.gymId,
-          userId: credential.userId, status: 'active' }, { $inc: { __v: 1 } }, { session, timestamps: false, returnDocument: 'after' }).select('_id').lean();
+          userId: credential.userId, status: 'active' }, { $inc: { __v: 1 } }, { session, timestamps: false, returnDocument: 'after' }).select('_id dateOfBirth').lean();
+        if (record?.dateOfBirth) requireAdultMember(record.dateOfBirth, (await gymCalendar(Gym, credential.gymId, now, session)).label);
         const access = await GymAccess.findOneAndUpdate({ gymId: credential.gymId, userId: credential.userId, role: 'member', status: 'active' },
           { $inc: { __v: 1 } }, { session, timestamps: false, returnDocument: 'after' }).select('_id').lean();
         if (!record || !access) fail('INVALID_ACTIVATION_CREDENTIAL');

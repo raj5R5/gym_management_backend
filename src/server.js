@@ -62,6 +62,7 @@ async function startServer({
         try {
           await app?.locals.memberPhotoService?.stopCleanup();
           await app?.locals.ownerPhotoService?.stopCleanup();
+          await app?.locals.recoveryService?.stop();
           await database.disconnect();
         } catch {
           failed = true;
@@ -94,7 +95,9 @@ async function startServer({
     if (database.connection?.models?.AuthSession) {
       await Promise.all([
         database.connection.models.AuthSession.createIndexes(),
+        database.connection.models.PasswordRecovery?.createIndexes(),
         database.connection.models.AccountDeletionRequest?.createIndexes(),
+        database.connection.models.DeletionFulfillment?.createIndexes(),
         database.connection.models.Gym.createIndexes(),
         database.connection.models.RefreshTokenRecord.createIndexes(),
         database.connection.models.MemberProfile.createIndexes(),

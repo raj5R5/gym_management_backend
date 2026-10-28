@@ -4,6 +4,7 @@ const schema = new Schema({
   status: { type: String, enum: ['active', 'revoked'], default: 'active', required: true },
   clientType: { type: String, enum: ['web', 'mobile'], required: true },
   currentTokenHash: { type: String, required: true, select: false },
+  credentialVersion: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
   expiresAt: { type: Date, required: true },
   idleExpiresAt: { type: Date, required: true },
   lastUsedAt: { type: Date, required: true },

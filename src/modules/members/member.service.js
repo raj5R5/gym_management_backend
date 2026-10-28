@@ -1,3 +1,5 @@
+const { gymCalendar } = require('../gymDashboard/dashboard.period');
+const { requireAdultMember } = require('./member.age');
 const { photoFields } = require('../memberPhotos/photo.dto');
 const { objectId } = require('../gyms/gym.validation');
 const { createMember, onboardMember, updateMember, memberListQuery } = require('./member.validation');
@@ -15,7 +17,7 @@ function memberDto(member) {
     gender: member.gender, address: member.address, emergencyContact: member.emergencyContact,
     status: member.status, createdAt: member.createdAt, updatedAt: member.updatedAt };
 }
-function createMemberService({ MemberProfile, UserAccount, authorizationService }) {
+function createMemberService({ MemberProfile, UserAccount, Gym = MemberProfile.db.models.Gym, authorizationService }) {
   async function scope(auth, authorization, allowed) {
     // Re-resolve server-side access for service callers, never trust a body tenant/role.
     authorizationService.requireRoles(auth, authorization, allowed, authorization?.gymId);
@@ -30,6 +32,7 @@ function createMemberService({ MemberProfile, UserAccount, authorizationService 
     return member;
   }
   async function insert(gymId, data, userId, session) {
+    if (data.dateOfBirth) requireAdultMember(data.dateOfBirth, (await gymCalendar(Gym, gymId, new Date(), session)).label);
     const record = { ...data, gymId, ...(userId ? { userId } : {}) };
     for (const key of Object.keys(record)) if (record[key] === null) delete record[key];
     const created = session ? (await MemberProfile.create([record], { session }))[0] : await MemberProfile.create(record);
@@ -80,7 +83,13 @@ function createMemberService({ MemberProfile, UserAccount, authorizationService 
     async update(auth, authorization, memberId, input) {
       const gymId = await scope(auth, authorization, ['admin']);
       const data = parse(updateMember, input);
-      await existing(gymId, memberId);
+      const previous = await existing(gymId, memberId);
+      // Check the stored DOB first: replacing or clearing it cannot bypass the minor restriction.
+      if (previous.dateOfBirth || data.dateOfBirth) {
+        const today = (await gymCalendar(Gym, gymId)).label;
+        requireAdultMember(previous.dateOfBirth, today);
+        requireAdultMember(data.dateOfBirth, today);
+      }
 
       const set = {}, unset = {};
       for (const [key, value] of Object.entries(data)) {

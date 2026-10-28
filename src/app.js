@@ -1,3 +1,9 @@
+const { getDeletionFulfillmentModel } = require('./modules/accountDeletion/fulfillment.model');
+const { getPasswordRecoveryModel } = require('./modules/passwordRecovery/recovery.model');
+const { createRecoveryService } = require('./modules/passwordRecovery/recovery.service');
+const { createRecoveryRouter } = require('./modules/passwordRecovery/recovery.routes');
+const { createRecoveryDelivery } = require('./modules/passwordRecovery/recovery.delivery');
+const { createPrivacyPolicyRouter } = require('./modules/privacyPolicy/privacy.routes');
 const { getAccountDeletionRequestModel } = require('./modules/accountDeletion/model');
 const { createAccountDeletionService } = require('./modules/accountDeletion/service');
 const { createAccountDeletionRouter, createPublicDeletionRouter } = require('./modules/accountDeletion/routes');
@@ -76,7 +82,7 @@ const { getGymAccessModel } = require('./modules/gymAccess/gymAccess.model');
 const { createGymAccessService } = require('./modules/gymAccess/gymAccess.service');
 const { createGymAccessRouter } = require('./modules/gymAccess/gymAccess.routes');
 
-function buildApp({ config, logger = createLogger(config), database, photoStorage, ownerPhotoStorage, bootstrap = false } = {}) {
+function buildApp({ config, logger = createLogger(config), database, photoStorage, ownerPhotoStorage, recoveryDelivery, bootstrap = false } = {}) {
   const app = express();
   const mountRouter = (path, ...handlers) => app.use(path, routeTemplatePrefix(path), ...handlers);
   app.disable('x-powered-by');
@@ -127,6 +133,7 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
   });
   app.get('/health', health);
   app.get('/api/v1/health', health);
+  mountRouter('/privacy-policy', createPrivacyPolicyRouter());
   app.get('/ready', (req, res) => {
     const databaseStatus = database?.getStatus() ?? 'disconnected';
     const ready = app.locals.ready && databaseStatus === 'connected';
@@ -152,6 +159,14 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       RefreshTokenRecord: getRefreshTokenModel(database.connection), config, logger,
     });
     mountRouter('/api/v1/auth', createAuthRouter(authService, config));
+    const recoveryService = createRecoveryService({ UserAccount: getUserAccountModel(database.connection),
+      AuthSession: getAuthSessionModel(database.connection), RefreshTokenRecord: getRefreshTokenModel(database.connection),
+      PasswordRecovery: getPasswordRecoveryModel(database.connection), delivery: recoveryDelivery ?? createRecoveryDelivery(config),
+      ttl: config.recovery?.ttl ?? 900, logger });
+    app.locals.recoveryService = recoveryService;
+    mountRouter('/api/v1/auth', createRecoveryRouter(recoveryService));
+    // Internal cases have no HTTP completion/admin endpoint.
+    getDeletionFulfillmentModel(database.connection);
     const deletionService = createAccountDeletionService({ UserAccount: getUserAccountModel(database.connection),
       AccountDeletionRequest: getAccountDeletionRequestModel(database.connection) });
     mountRouter('/api/v1/auth', createAccountDeletionRouter(deletionService, authService));
