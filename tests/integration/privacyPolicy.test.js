@@ -27,11 +27,13 @@ test('public privacy GET serves the exact local document without authentication 
   assert.match(response.headers['content-security-policy'], /default-src 'self'/);
 });
 
-test('local policy remains explicitly unapproved and uses only the confirmed public identity', async () => {
+test('local policy is the approved final text and uses only the confirmed public identity', async () => {
   const response = await request(makeApp()).get('/privacy-policy');
   assert.match(response.text, /MuscleDesk Privacy Policy/);
-  assert.match(response.text, /DRAFT — NOT APPROVED FOR PUBLICATION/);
-  assert.match(response.text, /name="robots" content="noindex,nofollow"/);
+  assert.match(response.text, /Effective date: October 29, 2026/);
+  // The release helper refuses to build while this label is served.
+  assert.doesNotMatch(response.text, /DRAFT|NOT APPROVED|Confirmation required/i);
+  assert.match(response.text, /href="\/account-deletion"/);
   assert.match(response.text, /Raj/);
   assert.match(response.text, /pcterajbca7772@gmail\.com/);
   assert.match(response.text, /https:\/\/gym-api\.semgroup\.in\/privacy-policy/);

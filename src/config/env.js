@@ -39,6 +39,11 @@ const envSchema = z.object({
   RECOVERY_SMTP_PASSWORD: z.string().min(1).max(512).optional().or(z.literal('')),
   RECOVERY_EMAIL_FROM: z.email().max(254).optional().or(z.literal('')),
   RECOVERY_TOKEN_TTL_SECONDS: seconds(900, 1800),
+  // disabled: request intake only. operator: intake plus operator-reviewed fulfillment
+  // processed by the server worker. enabled: self-service review and confirmation.
+  ACCOUNT_DELETION_AUTOMATION: z.enum(['enabled', 'operator', 'disabled']).default('disabled'),
+  // 32 random bytes as hex; encrypts the requester's email until the completion notice is sent.
+  ACCOUNT_DELETION_NOTICE_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/).refine(strongSigningSecret).optional().or(z.literal('')),
   API_BIND_HOST: z.string().refine((value) => Boolean(isIP(value))).optional(),
   TRUSTED_PROXIES: z.string().default('').transform((value) =>
     value.split(',').map((address) => address.trim()).filter(Boolean)
@@ -66,6 +71,12 @@ const envSchema = z.object({
   if (photoKeys.some((key) => env[key]) && !photoKeys.every((key) => env[key])) {
     context.addIssue({ code: 'custom', path: ['CLOUDINARY_CLOUD_NAME'], message: 'Configure all Cloudinary credentials or leave all empty' });
   }
+  if (env.ACCOUNT_DELETION_AUTOMATION !== 'disabled') {
+    // Automated deletion must be able to send its completion notice.
+    for (const key of ['ACCOUNT_DELETION_NOTICE_KEY', 'RECOVERY_SMTP_USER', 'RECOVERY_SMTP_PASSWORD', 'RECOVERY_EMAIL_FROM']) {
+      if (!env[key]) context.addIssue({ code: 'custom', path: [key], message: 'Required when account deletion automation is enabled' });
+    }
+  }
   if (env.ENABLE_BOOTSTRAP_ROUTES === 'true') {
     if (!['development', 'test'].includes(env.NODE_ENV)) {
       context.addIssue({ code: 'custom', path: ['ENABLE_BOOTSTRAP_ROUTES'], message: 'Bootstrap is local development/test only' });
@@ -89,6 +100,9 @@ function loadConfig(environment = process.env) {
     recovery: Object.freeze({ user: result.data.RECOVERY_SMTP_USER,
       password: result.data.RECOVERY_SMTP_PASSWORD, from: result.data.RECOVERY_EMAIL_FROM,
       ttl: result.data.RECOVERY_TOKEN_TTL_SECONDS }),
+    accountDeletion: Object.freeze({ mode: result.data.ACCOUNT_DELETION_AUTOMATION,
+      automated: result.data.ACCOUNT_DELETION_AUTOMATION === 'enabled',
+      noticeKey: result.data.ACCOUNT_DELETION_NOTICE_KEY ? Buffer.from(result.data.ACCOUNT_DELETION_NOTICE_KEY, 'hex') : null }),
     cloudinary: Object.freeze({ cloudName: result.data.CLOUDINARY_CLOUD_NAME,
       apiKey: result.data.CLOUDINARY_API_KEY, apiSecret: result.data.CLOUDINARY_API_SECRET }),
     jwtAccessSecret: result.data.JWT_ACCESS_SECRET,

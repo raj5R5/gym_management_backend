@@ -7,6 +7,10 @@ const { createPrivacyPolicyRouter } = require('./modules/privacyPolicy/privacy.r
 const { getAccountDeletionRequestModel } = require('./modules/accountDeletion/model');
 const { createAccountDeletionService } = require('./modules/accountDeletion/service');
 const { createAccountDeletionRouter, createPublicDeletionRouter } = require('./modules/accountDeletion/routes');
+const { getDeletionJobModel } = require('./modules/accountDeletion/automation.model');
+const { createDeletionAutomation } = require('./modules/accountDeletion/automation.service');
+const { createDeletionAdapters } = require('./modules/accountDeletion/automation.adapters');
+const { createAccountDeletionAutomationRouter } = require('./modules/accountDeletion/automation.routes');
 const { getOwnerProfileModel } = require('./modules/ownerProfile/profile.model');
 const { createOwnerProfileService } = require('./modules/ownerProfile/profile.service');
 const { createOwnerProfileRouter } = require('./modules/ownerProfile/profile.routes');
@@ -167,10 +171,15 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
     mountRouter('/api/v1/auth', createRecoveryRouter(recoveryService));
     // Internal cases have no HTTP completion/admin endpoint.
     getDeletionFulfillmentModel(database.connection);
+    getDeletionJobModel(database.connection);
     const deletionService = createAccountDeletionService({ UserAccount: getUserAccountModel(database.connection),
       AccountDeletionRequest: getAccountDeletionRequestModel(database.connection) });
-    mountRouter('/api/v1/auth', createAccountDeletionRouter(deletionService, authService));
-    mountRouter('/account-deletion', createPublicDeletionRouter(deletionService));
+    // Mounted after every model is registered (end of this block) when automation is enabled.
+    const mountDeletion = (engine) => {
+      mountRouter('/api/v1/auth', createAccountDeletionRouter(deletionService, authService, { automated: Boolean(engine) }));
+      if (engine) mountRouter('/api/v1/auth', createAccountDeletionAutomationRouter(engine, authService));
+      mountRouter('/account-deletion', createPublicDeletionRouter(deletionService, engine));
+    };
     const ownerRegistrationService = createOwnerRegistrationService({
       UserAccount: getUserAccountModel(database.connection), Gym: getGymModel(database.connection),
       GymAccess: getGymAccessModel(database.connection),
@@ -268,6 +277,20 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
       subscriptionService, paymentService, authorizationService });
     mountRouter('/api/v1/gyms/:gymId/member-memberships', createMemberMembershipRouter(memberMembershipService, authService,
       createAuthorizationMiddleware(authorizationService)));
+    let deletionEngine = null;
+    const deletionMode = config.accountDeletion?.mode ?? 'disabled';
+    if (deletionMode !== 'disabled') {
+      const delivery = recoveryDelivery ?? createRecoveryDelivery(config);
+      deletionEngine = createDeletionAutomation({ models: database.connection.models, authService, enabled: true,
+        notificationKey: config.accountDeletion.noticeKey,
+        adapters: createDeletionAdapters({ models: database.connection.models, delivery,
+          photoServices: [ownerProfileService.photos, memberPhotoService], logger,
+          operatorEmail: deletionMode === 'operator' ? config.recovery.from : null }) });
+      app.locals.deletionEngine = deletionEngine;
+      app.locals.deletionWorker = createDeletionWorker(deletionEngine, logger);
+    }
+    // Operator mode keeps request intake; only 'enabled' exposes self-service confirmation.
+    mountDeletion(deletionMode === 'enabled' ? deletionEngine : null);
   }
 
   // Temporary unauthenticated bootstrap functionality, never a production authorization path.
@@ -285,6 +308,24 @@ function buildApp({ config, logger = createLogger(config), database, photoStorag
   app.use(notFound);
   app.use(errorHandler);
   return app;
+}
+
+// Drains due deletion jobs once a minute; a failed pass keeps its durable retry.
+function createDeletionWorker(engine, logger) {
+  let timer; let running;
+  async function drain() { for (let i = 0; i < 20 && await engine.processNext(); i++); }
+  return {
+    start() {
+      if (timer) return;
+      const run = () => {
+        if (running) return;
+        running = drain().catch(() => logger?.warn('Account deletion pass deferred')).finally(() => { running = null; });
+      };
+      timer = setInterval(run, 60_000); timer.unref(); run();
+    },
+    async stop() { clearInterval(timer); timer = null; await running; },
+    drain,
+  };
 }
 
 // Construction is explicit: importing this module validates no environment and opens no sockets.

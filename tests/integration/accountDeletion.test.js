@@ -83,7 +83,7 @@ test('external page works without an installed app, authenticates the password a
   assert.equal(page.headers['cache-control'], 'no-store');
   assert.match(page.headers['content-security-policy'], /default-src 'self'/);
   const r = await request(app).post('/account-deletion').type('form').send({ email: user.email, ...body() });
-  assert.equal(r.status, 202); assert.match(r.text, /Account deletion has not been confirmed/);
+  assert.equal(r.status, 202); assert.match(r.text, /Account deletion has not been carried out yet/);
   assert.match(r.text, /MuscleDesk · Account deletion/);
   assert.match(r.text, /href="\/privacy-policy"/);
   assert.match(r.text, /mailto:pcterajbca7772@gmail\.com/);
@@ -107,7 +107,7 @@ test('public page HEAD, stylesheet and privacy navigation are read-only and requ
   const policy = await request(app).get('/privacy-policy');
   assert.equal(policy.status, 200);
   assert.match(policy.text, /href="\/account-deletion"/);
-  assert.match(policy.text, /DRAFT — NOT APPROVED FOR PUBLICATION/);
+  assert.match(policy.text, /Effective date: October 29, 2026/);
   assert.equal(await models.AccountDeletionRequest.countDocuments(), 0);
   assert.equal(await models.UserAccount.countDocuments(), 1);
 });

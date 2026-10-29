@@ -22,6 +22,19 @@ function createRecoveryDelivery(config, createTransport = nodemailer.createTrans
       return send(email, 'MuscleDesk password changed',
         'Your MuscleDesk password was changed. Existing sessions have been revoked. If this was not you, use Recover access and contact the published support address. Do not send passwords or recovery codes to support.');
     },
+    sendDeletionCompleted({ email, reference, closedGyms }) {
+      return send(email, 'MuscleDesk account deleted',
+        `Your MuscleDesk account has been deleted (reference ${reference}). Your login, sessions, owner profile and the photos linked to it were removed from the live service.${closedGyms ? ' The gym you chose to close and all of its records were deleted.' : ' Gym records you shared with other owners or staff remain with that gym, without a link to your account.'}\n\nCopies may remain in database backups until those backups expire; backups are not used for normal operation. See the MuscleDesk privacy policy for details. This is the last email about this account.`);
+    },
+    sendDeletionOperatorAlert({ email, reference, reason, kind }) {
+      // Operator mailbox only: ids and reason codes, no requester details.
+      return send(email, 'MuscleDesk deletion job needs attention',
+        `Deletion job ${reference} ${kind === 'blocked' ? 'stopped before anything was deleted' : 'is retrying'}: ${reason}. Run \`npm run deletion:operator -- list\` on the server to review it.`);
+    },
+    sendDeletionNeedsAction({ email, reference, reason }) {
+      return send(email, 'MuscleDesk account deletion needs your review',
+        `Your MuscleDesk account deletion request (reference ${reference}) stopped before anything was deleted because ${reason}. Your account still works. To continue, open MuscleDesk > More > Request account deletion, or the public account-deletion page, review the changes and confirm again.`);
+    },
   };
 }
 module.exports = { createRecoveryDelivery };

@@ -1,4 +1,4 @@
-# Production operations and deletion fulfillment
+# Production operations and account deletion
 
 Local code preparation does not deploy changes to the Hostinger VPS. Do not run destructive operations against the hosted database for validation. The existing HTTPS API remains authoritative for membership eligibility, expiry, money and permissions.
 
@@ -16,15 +16,24 @@ Use `NODE_ENV=production`, bootstrap disabled, actual secret environment configu
 - Unique account index and atomic upsert make duplicates/concurrent retries return one receipt. Status reads are scoped and no-store. Request fields contain only account reference, status and timestamps. It does not alter memberships, financial records, photos, sessions, account status or gym access.
 - The app rechecks status after an ambiguous POST. No success is shown without a server receipt; a received request never claims completed deletion. Old deployed APIs present an explicit unavailable/retry state.
 
-## Mandatory fulfillment before public launch — not automated
+## Manual deletion fulfillment — release process
 
-The request queue is an intake workflow. **Actual account/data deletion is not yet implemented as an automatic worker**, because final retention rules and handling of sole gym owners/shared business records have not been agreed. The app must not be declared production-ready merely because this queue exists.
+Approved 29 October 2026: Raj reviews and fulfils deletion requests personally. Users request deletion in the app (`POST /api/v1/auth/account-deletion-request`), on `/account-deletion`, or by email to the support address. Requests show `requested` → `in_review` → `completed`, and `completed` is set only by the worker after erasure is verified.
 
-Establish an accountable operator, turnaround deadline, monitoring/escalation and a secure support channel. Review pending `AccountDeletionRequest` records using privileged internal access; do not expose a public/admin list of other users' requests. Confirm identity, gym ownership handoff, legal retention basis and data scope. Never make deletion conditional on retaining a paid subscription or completing unrelated tasks.
+Server configuration (`.env`, never committed): `ACCOUNT_DELETION_AUTOMATION=operator`, `ACCOUNT_DELETION_NOTICE_KEY` (`openssl rand -hex 32`) and the three `RECOVERY_SMTP_*`/`RECOVERY_EMAIL_FROM` values. Startup refuses operator mode without them. Operator mode keeps the intake routes, adds no self-service routes, starts the deletion worker after listen, and emails alerts to `RECOVERY_EMAIL_FROM` instead of the requester.
 
-The approved fulfillment procedure must cover account credentials/sessions and grants, owner profile/photo and durable Cloudinary cleanup, linked trainer/member records where appropriate, local outbox/cache behavior after sign-out/account revocation, audit/request records, backups and any lawfully retained financial records. Assess data about other people separately; do not blindly cascade-delete a gym's member/payment collections. Use existing photo cleanup machinery rather than direct untracked provider deletion. Retained data needs a documented purpose and period, not indefinite retention.
+Operator procedure, on the server (`npm run deletion:operator -- <command>`):
 
-Revoke access as part of actual fulfillment, verify deletion/redaction and provider cleanup, communicate the result, and only then mark the request completed through a controlled internal procedure. No completion endpoint or “pretend deleted” account toggle is exposed by this implementation. Test the approved process end-to-end on synthetic data before launch.
+1. `list` — open requests with account email and job state.
+2. Email requests: reply to the account's address; after the reply from that mailbox, `record-email <address>` creates the request.
+3. `show <requestId>` — account, gyms, allowed choices and successors.
+4. Sole-owned gyms: email the owner. For a handoff, the owner promotes the staff member to admin in Staff, then the gym is `leave`. For closure, keep the owner's written confirmation and pass `--closure-confirmed`.
+5. `fulfill <requestId> <gymId>=leave|close … --yes [--closure-confirmed]` (without `--yes` it is a dry run). The API worker then erases the account in one transaction, purges closed gyms (resumable), drains Cloudinary photo cleanup, verifies the live database and sends the completion email.
+6. `status <requestId>` — job stage. A stopped job (`needs_action`) erased nothing; resolve the reason and run `fulfill` again.
+
+After any database restore, re-run fulfilment for requests whose `AccountDeletionRequest` is `completed` before reopening the service (the request and job records keep only ids and timestamps for this).
+
+Optional `ACCOUNT_DELETION_AUTOMATION=enabled` instead exposes self-service review/confirmation (code in `src/modules/accountDeletion/automation.*`, routes `/api/v1/auth/account-deletion/*`); it is not used for the first release.
 
 ## Reliability verification
 
