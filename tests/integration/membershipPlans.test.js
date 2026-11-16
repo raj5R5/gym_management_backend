@@ -96,7 +96,7 @@ test('admin and trainer can read active and inactive plans', async () => {
     assert.equal(retrieved.status, 200); assert.deepEqual(retrieved.body.data, data);
     assert.equal(retrieved.headers['cache-control'], 'no-store');
     const listed = await send('get', path(), token);
-    assert.equal(listed.status, 200); assert.deepEqual(listed.body.data, [data]);
+    assert.equal(listed.status, 200); assert.deepEqual(listed.body.data, [{ ...data, activeMemberCount: 0 }]);
   }
 });
 
@@ -137,7 +137,7 @@ test('same plan name may exist in another gym while cross-gym requests remain is
   error(await send('patch', `${path()}/${foreign.id}`, token, { price: 1 }), 404, 'PLAN_NOT_FOUND');
   assert.equal((await models.MembershipPlan.findById(foreign.id)).price, 150000);
   const list = await send('get', path(), token);
-  assert.deepEqual(list.body.data, [own]); assert.equal(list.body.meta.pagination.total, 1);
+  assert.deepEqual(list.body.data, [{ ...own, activeMemberCount: 0 }]); assert.equal(list.body.meta.pagination.total, 1);
 });
 
 test('admin can update name, duration, price and description without changing identity or omitted fields', async () => {

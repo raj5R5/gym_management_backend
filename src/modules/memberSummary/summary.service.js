@@ -25,14 +25,18 @@ function subscriptionDto(record, today) {
     || !record.startDate.toISOString().endsWith('T00:00:00.000Z') || !record.endDate.toISOString().endsWith('T00:00:00.000Z')
     || typeof record.planNameSnapshot !== 'string' || !record.planNameSnapshot.length || record.planNameSnapshot.length > 120
     || !Number.isSafeInteger(record.durationDaysSnapshot) || record.durationDaysSnapshot < 1 || record.durationDaysSnapshot > MAX_DURATION_DAYS) fail();
-  const expected = new Date(record.startDate); expected.setUTCDate(expected.getUTCDate() + record.durationDaysSnapshot);
+  // Frozen days extend the end date; older records have none.
+  const frozenDays = record.frozenDays ?? 0;
+  if (!Number.isSafeInteger(frozenDays) || frozenDays < 0) fail();
+  const expected = new Date(record.startDate); expected.setUTCDate(expected.getUTCDate() + record.durationDaysSnapshot + frozenDays);
   if (expected.getTime() !== record.endDate.getTime()) fail();
   return { id: String(record._id), membershipPlanId: String(record.membershipPlanId), planNameSnapshot: record.planNameSnapshot,
     durationDaysSnapshot: record.durationDaysSnapshot, pricePaiseSnapshot: integer(record.pricePaiseSnapshot, MAX_PRICE_PAISE),
     startDate: record.startDate.toISOString().slice(0, 10), endDate: record.endDate.toISOString().slice(0, 10),
     status: record.status === 'cancelled' ? 'cancelled' : record.endDate <= today ? 'expired' : 'active',
     isCurrentlyActive: record.status !== 'cancelled' && record.startDate <= today && record.endDate > today,
-    previousSubscriptionId: record.previousSubscriptionId ? String(record.previousSubscriptionId) : null };
+    previousSubscriptionId: record.previousSubscriptionId ? String(record.previousSubscriptionId) : null,
+    frozenDays, discountPaise: record.discountPaise ?? 0 };
 }
 function paymentDto(record) { return record ? { id: String(record._id), subscriptionId: String(record.subscriptionId),
   amountPaise: integer(record.amountPaise, MAX_PRICE_PAISE), paymentMethod: record.paymentMethod,

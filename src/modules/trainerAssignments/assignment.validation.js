@@ -19,5 +19,8 @@ const scopedInput = scopedQuery.extend({ page: z.number().int().min(1).max(10000
 const trainerParams = z.strictObject({ gymId: objectId, trainerId: objectId });
 const memberParams = z.strictObject({ gymId: objectId, memberId: objectId });
 const empty = z.strictObject({});
+// A trainer taking on (or letting go of) a member as their own client.
+const claimAssignment = z.strictObject({ memberId: objectId });
+const myMemberParams = z.strictObject({ gymId: objectId, memberId: objectId });
 module.exports = { statuses, createAssignment, updateAssignment, assignmentParams, assignmentListQuery, assignmentListInput,
-  scopedQuery, scopedInput, trainerParams, memberParams, empty };
+  scopedQuery, scopedInput, trainerParams, memberParams, empty, claimAssignment, myMemberParams };

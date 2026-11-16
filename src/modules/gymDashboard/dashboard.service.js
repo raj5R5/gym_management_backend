@@ -9,7 +9,24 @@ function exactMoney(value) {
   if (amount < 0n || amount > BigInt(Number.MAX_SAFE_INTEGER)) fail('INVALID_FINANCIAL_STATE'); return Number(amount);
 }
 function createDashboardService({ Gym, MemberProfile, TrainerProfile, MembershipPlan, MemberSubscription, Payment,
-  authorizationService, clock = () => new Date() }) {
+  MemberVisit, Expense, leadMetrics, authorizationService, clock = () => new Date() }) {
+  // Spending in the period (gym-local days), for profit = collected - spent.
+  async function expenses(gymId, start, end) {
+    if (!Expense) return undefined;
+    const [result] = await Expense.aggregate([{ $match: { gymId, status: 'active',
+      spentOn: { $gte: new Date(`${start}T00:00:00.000Z`), $lte: new Date(`${end}T00:00:00.000Z`) } } },
+    { $group: { _id: null, amount: { $sum: '$amountPaise' } } }]);
+    return exactMoney(result?.amount ?? 0);
+  }
+  // Check-ins per gym-local day in the period, and how many different members came.
+  async function visits(gymId, start, end, today) {
+    if (!MemberVisit) return undefined;
+    const startDay = new Date(`${start}T00:00:00.000Z`); const endDay = new Date(`${end}T00:00:00.000Z`);
+    const [result] = await MemberVisit.aggregate([{ $match: { gymId, visitDate: { $gte: startDay, $lte: endDay } } },
+      { $group: { _id: null, total: { $sum: 1 }, members: { $addToSet: '$memberId' } } }]);
+    const todayCount = await MemberVisit.countDocuments({ gymId, visitDate: today });
+    return { periodCount: count(result?.total), distinctMembers: count(result?.members?.length ?? 0), today: count(todayCount) };
+  }
   async function profiles(model, gymId) {
     const records = await model.aggregate([{ $match: { gymId } },
       { $group: { _id: '$status', count: { $sum: 1 } } }]);
@@ -91,10 +108,19 @@ function createDashboardService({ Gym, MemberProfile, TrainerProfile, Membership
     const gym = await Gym.findOne({ _id: gymId, status: 'active' }).select('settings.timezone').lean(); if (!gym) fail('FORBIDDEN');
     const timezone = gym.settings?.timezone ?? 'UTC'; if (typeof timezone !== 'string' || !timezone) fail();
     const period = await dashboardPeriod(Gym, gymId, timezone, input, clock());
-    const [members, trainers, subs, paid, dues] = await Promise.all([profiles(MemberProfile, gymId),
+    const [members, trainers, subs, paid, dues, joined, visited, spent, leads] = await Promise.all([profiles(MemberProfile, gymId),
       profiles(TrainerProfile, gymId), subscriptions(gymId, period.today),
-      payments(gymId, period.start, period.end), outstanding(gymId)]);
-    return { period: period.dto, members, trainers, subscriptions: subs, payments: { ...paid, outstandingAmountPaise: dues } };
+      payments(gymId, period.start, period.end), outstanding(gymId),
+      MemberProfile.countDocuments({ gymId, createdAt: { $gte: period.start, $lt: period.end } }),
+      visits(gymId, period.dto.from, period.dto.to, period.today),
+      expenses(gymId, period.dto.from, period.dto.to),
+      leadMetrics ? leadMetrics(gymId, period.start, period.end, period.today) : undefined]);
+    return { period: period.dto, members: { ...members, joinedInPeriod: count(joined) }, trainers, subscriptions: subs,
+      payments: { ...paid, outstandingAmountPaise: dues }, ...(visited ? { visits: visited } : {}),
+      // Profit can be negative; it is collected revenue minus recorded expenses.
+      ...(spent === undefined ? {} : { expenses: { periodAmountPaise: spent,
+        profitPaise: paid.periodSuccessfulAmountPaise - spent } }),
+      ...(leads ? { leads } : {}) };
   } };
 }
 module.exports = { createDashboardService };

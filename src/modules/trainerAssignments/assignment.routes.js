@@ -17,6 +17,15 @@ function createAssignmentRouter(service, authService, authorization) {
     } catch (error) { next(error); }
   };
   router.post('/', authorization.requireRoles('admin'), validate({ body: schemas.createAssignment }), controller.create);
+  const send = (req, res, data, status = 200) => res.status(status).json({ success: true, data, meta: { requestId: req.id } });
+  router.get('/me', authorization.requireRoles('trainer'), validate({ query: schemas.scopedQuery.omit({ status: true }) }),
+    async (req, res) => send(req, res, await service.myMembers(req.auth, req.authorization, req.validated.query)));
+  router.post('/me', authorization.requireRoles('trainer'), validate({ body: schemas.claimAssignment }), async (req, res) => {
+    const { assignment, created } = await service.claim(req.auth, req.authorization, req.validated.body);
+    send(req, res, assignment, created ? 201 : 200);
+  });
+  router.delete('/me/:memberId', authorization.requireRoles('trainer'), validate({ params: schemas.myMemberParams }),
+    async (req, res) => send(req, res, await service.release(req.auth, req.authorization, req.params.memberId)));
   router.get('/', authorization.requireRoles('admin', 'trainer'), validate({ query: schemas.assignmentListQuery }), readGuard, controller.list);
   router.get('/:assignmentId', authorization.requireRoles('admin', 'trainer'),
     validate({ params: schemas.assignmentParams }), readGuard, controller.get);

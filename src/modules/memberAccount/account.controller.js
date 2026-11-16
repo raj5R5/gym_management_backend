@@ -8,6 +8,10 @@ function createMemberAccountController(service) {
       return send(req, res, { ...result.data, ...(result.activationToken ? { activationToken: result.activationToken,
         activationExpiresAt: result.activationExpiresAt } : {}) }, 201);
     },
+    async reissue(req, res) {
+      const result = await service.reissue(req.auth, req.authorization, req.validated.params.memberId, audit(req));
+      return send(req, res, { ...result.data, activationToken: result.activationToken, activationExpiresAt: result.activationExpiresAt });
+    },
     async revoke(req, res) { return send(req, res, await service.revoke(req.auth, req.authorization, req.validated.params.memberId, audit(req))); },
     async activate(req, res) { return send(req, res, await service.activate(req.validated.body, audit(req))); },
   };

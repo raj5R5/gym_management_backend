@@ -31,6 +31,7 @@ const publicErrors = {
   PHOTO_OPERATION_CONFLICT: [409, 'This saved photo operation does not match the original selection.'],
   OWNER_REGISTRATION_STORAGE_UNAVAILABLE: [503, 'Owner registration requires transaction-capable database storage.'],
   DUPLICATE_GYM_NAME: [409, 'A gym with this name already exists. Choose a different name.'],
+  BRANCH_LIMIT_REACHED: [409, 'You have reached the maximum number of branches.'],
   IDEMPOTENCY_KEY_CONFLICT: [409, 'This idempotency key was already used with a different request.'],
   ONBOARDING_STORAGE_UNAVAILABLE: [503, 'Combined onboarding requires transaction-capable database storage.'],
   INVALID_CREDENTIALS: [401, 'Invalid email or password.'],
@@ -40,6 +41,8 @@ const publicErrors = {
   NOT_FOUND: [404, 'Route not found.'],
   GYM_NOT_FOUND: [404, 'Gym not found.'],
   MEMBER_NOT_FOUND: [404, 'Member not found.'],
+  MEMBER_NOT_ACTIVE: [409, 'This member profile is not active.'],
+  MEMBERSHIP_NOT_ACTIVE: [409, 'This member has no active membership. Renew it, or check in with an override.'],
   TRAINER_NOT_FOUND: [404, 'Trainer not found.'],
   ASSIGNMENT_NOT_FOUND: [404, 'Assignment not found.'],
   PLAN_NOT_FOUND: [404, 'Membership plan not found.'],
@@ -49,10 +52,35 @@ const publicErrors = {
   MEMBER_ACCOUNT_STORAGE_UNAVAILABLE: [503, 'Member account changes require transaction-capable database storage.'],
   MEMBER_ACCOUNT_IDENTITY_CONFLICT: [409, 'The email or member is already linked to another identity.'],
   MEMBER_ACCOUNT_ALREADY_PROVISIONED: [409, 'Member login access is already provisioned.'],
+  MEMBER_ACCOUNT_ALREADY_ACTIVATED: [409, 'This member has already set a password.'],
   MEMBER_ACCOUNT_NOT_PROVISIONED: [404, 'Member login access has not been provisioned.'],
   INVALID_ACTIVATION_CREDENTIAL: [401, 'Activation credential is invalid or expired.'],
+  TRAINER_ALREADY_LINKED: [409, 'This trainer already has app access.'],
+  TRAINER_INACTIVE: [409, 'Activate this trainer before giving app access.'],
   DUPLICATE_GYM_ACCESS: [409, 'This account already has access to this gym.'],
   PAYMENT_NOT_FOUND: [404, 'Payment not found.'],
+  RECEIPT_UNAVAILABLE: [409, 'A receipt is only available for a successful payment.'],
+  EXPENSE_NOT_FOUND: [404, 'Expense not found.'],
+  REPORT_RANGE_TOO_LONG: [400, 'Pick a period of one year or less.'],
+  REPORT_TOO_LARGE: [422, 'This report is too large to build. Pick a shorter period.'],
+  CLAIM_NOT_FOUND: [404, 'Payment report not found.'],
+  CLAIM_ALREADY_DECIDED: [409, 'This payment report was already confirmed or rejected.'],
+  CLAIM_EXCEEDS_DUE: [409, 'That is more than the amount due.'],
+  DUPLICATE_CLAIM_REFERENCE: [409, 'This UPI transaction ID was already reported.'],
+  PT_PACKAGE_NOT_FOUND: [404, 'Personal training package not found.'],
+  PT_PACKAGE_CLOSED: [409, 'This package is completed or cancelled.'],
+  PT_PACKAGE_EXPIRED: [409, 'This package expired before that date.'],
+  PT_PAYMENT_EXCEEDS_BALANCE: [409, 'A payment cannot be more than the amount still unpaid.'],
+  PT_PARTICIPANT_INACTIVE: [409, 'The member and trainer must both be active.'],
+  PT_SESSION_DATE_INVALID: [400, 'Pick a session date between the package start and today.'],
+  LEAD_NOT_FOUND: [404, 'Enquiry not found.'],
+  DUPLICATE_LEAD: [409, 'An open enquiry with this phone number already exists.'],
+  LEAD_STATE_CHANGED: [409, 'This enquiry changed or has already joined. Reload and try again.'],
+  FREEZE_NOT_ALLOWED: [409, 'This membership cannot be frozen with these dates.'],
+  FREEZE_OVERLAP: [409, 'This freeze overlaps another freeze on the same membership.'],
+  FREEZE_NOT_FOUND: [404, 'Freeze not found.'],
+  DISCOUNT_EXCEEDS_BALANCE: [409, 'A discount cannot be more than the amount still unpaid.'],
+  ADJUSTMENT_CONFLICT: [409, 'This membership changed just now. Reload and try again.'],
   PAYMENT_MEMBER_MISMATCH: [400, 'Subscription does not belong to the specified member.'],
   PAYMENT_SUBSCRIPTION_CANCELLED: [409, 'Cannot record payment against a cancelled subscription.'],
   PAYMENT_OVERPAYMENT: [409, 'Payment exceeds the remaining subscription amount.'],
@@ -110,9 +138,13 @@ function errorHandler(error, req, res, next) {
 
   if (status >= 500) req.log?.error({ err: error, requestId: req.id }, 'Request failed');
 
+  // Only allow-listed codes carry structured, non-sensitive details for the client.
+  const details = ['MEMBERSHIP_NOT_ACTIVE', 'FREEZE_NOT_ALLOWED', 'DISCOUNT_EXCEEDS_BALANCE', 'DUPLICATE_LEAD'].includes(code)
+    && error.details
+    ? { details: error.details } : {};
   return res.status(status).json({
     success: false,
-    error: { code, message },
+    error: { code, message, ...details },
     meta: { requestId: req.id },
   });
 }

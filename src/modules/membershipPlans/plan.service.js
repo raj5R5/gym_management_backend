@@ -1,4 +1,6 @@
+const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
+const { gymCalendar } = require('../gymDashboard/dashboard.period');
 const { createPlan, updatePlan, planListInput } = require('./plan.validation');
 function fail(code) { const error = new Error('Plan operation failed.'); error.code = code; throw error; }
 function parse(schema, value) {
@@ -11,7 +13,19 @@ function dto(plan) {
     durationDays: plan.durationDays, price: plan.price, status: plan.status,
     description: plan.description, createdAt: plan.createdAt, updatedAt: plan.updatedAt };
 }
-function createPlanService({ MembershipPlan, authorizationService }) {
+function createPlanService({ MembershipPlan, MemberSubscription, Gym, authorizationService }) {
+  // Distinct members whose non-cancelled period on each plan covers the gym-local today.
+  async function activeMembers(gymId, planIds) {
+    if (!MemberSubscription || !Gym || !planIds.length) return new Map();
+    const gym = new Types.ObjectId(String(gymId));
+    const { day } = await gymCalendar(Gym, gym);
+    const rows = await MemberSubscription.aggregate([
+      { $match: { gymId: gym, membershipPlanId: { $in: planIds }, status: { $ne: 'cancelled' },
+        startDate: { $lte: day }, endDate: { $gt: day } } },
+      { $group: { _id: { plan: '$membershipPlanId', member: '$memberId' } } },
+      { $group: { _id: '$_id.plan', count: { $sum: 1 } } }]);
+    return new Map(rows.map((row) => [String(row._id), row.count]));
+  }
   async function scope(auth, authorization, allowed) {
     authorizationService.requireRoles(auth, authorization, allowed, authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
@@ -40,7 +54,9 @@ function createPlanService({ MembershipPlan, authorizationService }) {
         MembershipPlan.find(filter).sort({ createdAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
         MembershipPlan.countDocuments(filter),
       ]);
-      return { data: records.map(dto), pagination: { page, limit, total } };
+      const counts = await activeMembers(gymId, records.map((record) => record._id));
+      return { data: records.map((record) => ({ ...dto(record), activeMemberCount: counts.get(String(record._id)) ?? 0 })),
+        pagination: { page, limit, total } };
     },
     async update(auth, authorization, planId, input) {
       const gymId = await scope(auth, authorization, ['admin']);

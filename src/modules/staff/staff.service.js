@@ -9,7 +9,7 @@ function dto(user, access) {
   return { userId: String(user._id), email: user.email, displayName: user.displayName ?? null,
     gymId: String(access.gymId), role: access.role, status: access.status };
 }
-function createStaffService({ UserAccount, GymAccess, Gym, authorizationService, logger }) {
+function createStaffService({ UserAccount, GymAccess, Gym, TrainerProfile, authorizationService, logger }) {
   async function scope(auth, authorization) {
     authorizationService.requireRoles(auth, authorization, ['admin'], authorization?.gymId);
     const current = await authorizationService.requireGymAccess(auth, authorization.gymId);
@@ -63,7 +63,17 @@ function createStaffService({ UserAccount, GymAccess, Gym, authorizationService,
           user = record.toObject();
         }
         const [access] = await GymAccess.create([{ userId: user._id, gymId: selected.gymId, role: data.role, status: 'active' }], { session });
-        return { data: dto(user, access), created };
+        if (data.trainerId) {
+          // Link once: a profile already tied to a login is never re-pointed.
+          const linked = await TrainerProfile.updateOne({ _id: new Types.ObjectId(data.trainerId), gymId: selected.gymId,
+            status: 'active', userId: { $exists: false } }, { $set: { userId: user._id } }, { session, overwriteImmutable: true });
+          if (linked.matchedCount !== 1) {
+            const trainer = await TrainerProfile.findOne({ _id: data.trainerId, gymId: selected.gymId }).session(session)
+              .select('status userId').lean();
+            fail(!trainer ? 'TRAINER_NOT_FOUND' : trainer.userId ? 'TRAINER_ALREADY_LINKED' : 'TRAINER_INACTIVE');
+          }
+        }
+        return { data: { ...dto(user, access), ...(data.trainerId ? { trainerId: data.trainerId } : {}) }, created };
       });
       event(result.created ? 'staff.account_created' : 'staff.access_created', auth, selected.gymId, result.data.userId, audit);
       return result.data;

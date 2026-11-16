@@ -5,7 +5,8 @@ const { objectId } = require('../gyms/gym.validation');
 const { normalizeEmail } = require('../userAccounts/userAccount.validation');
 const { hashPassword } = require('../auth/password');
 const schemas = require('./account.validation');
-const ACTIVATION_TTL_MS = 15 * 60 * 1000;
+// Long enough to hand over by WhatsApp; the code is single-use and stored only as a digest.
+const ACTIVATION_TTL_MS = 72 * 60 * 60 * 1000;
 function fail(code) { const error = new Error('Member account operation failed.'); error.code = code; throw error; }
 function parse(schema, input) { const result = schema.safeParse(input); if (!result.success) fail('VALIDATION_ERROR'); return result.data; }
 function digest(token) { return createHash('sha256').update(token).digest('hex'); }
@@ -87,6 +88,26 @@ function createMemberAccountService({ MemberProfile, UserAccount, GymAccess, Gym
         return { data: dto(user, access), ...(user.passwordHash ? {} : { activationToken, activationExpiresAt: expiresAt }) };
       });
       event('member.account_provisioned', selected.gymId, memberId, result.data.userId, audit, auth.user._id);
+      return result;
+    },
+    // A fresh code for a member who has not set a password yet; earlier codes stop working.
+    async reissue(auth, authorization, memberId, audit) {
+      const selected = await scope(auth, authorization);
+      const activationToken = randomBytes(32).toString('base64url'); const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS);
+      const result = await transaction(async (session) => {
+        await lockAdmin(auth, selected, session); const record = await member(selected.gymId, memberId, session, true);
+        if (record.status !== 'active') fail('FORBIDDEN');
+        const found = await linked(selected.gymId, record, session);
+        if (!found.access || found.access.status !== 'active') fail('MEMBER_ACCOUNT_NOT_PROVISIONED');
+        if (found.user.passwordHash) fail('MEMBER_ACCOUNT_ALREADY_ACTIVATED');
+        if (found.user.status !== 'active') fail('FORBIDDEN');
+        await MemberActivation.updateMany({ userId: record.userId, gymId: selected.gymId, memberId: record._id, usedAt: null },
+          { $set: { usedAt: new Date() } }, { session });
+        await MemberActivation.create([{ tokenDigest: digest(activationToken), userId: record.userId,
+          gymId: selected.gymId, memberId: record._id, expiresAt }], { session });
+        return { data: dto(found.user, found.access), activationToken, activationExpiresAt: expiresAt };
+      });
+      event('member.activation_reissued', selected.gymId, memberId, result.data.userId, audit, auth.user._id);
       return result;
     },
     async revoke(auth, authorization, memberId, audit) {

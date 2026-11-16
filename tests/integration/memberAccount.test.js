@@ -72,7 +72,7 @@ test('admin provisions an active member without a password and receives one opaq
   const credential = await models.MemberActivation.findOne({ userId: result.userId }).select('+tokenDigest').lean();
   assert.equal(credential.tokenDigest, createHash('sha256').update(result.activationToken).digest('hex'));
   assert.equal(String(credential.memberId), String(memberA._id)); assert.equal(String(credential.gymId), String(gymA._id)); assert.equal(credential.usedAt, null);
-  assert.ok(credential.expiresAt > new Date() && credential.expiresAt <= new Date(Date.now() + 15 * 60 * 1000));
+  assert.ok(credential.expiresAt > new Date() && credential.expiresAt <= new Date(Date.now() + 72 * 60 * 60 * 1000));
   assert.doesNotMatch(JSON.stringify(credential), new RegExp(result.activationToken));
   const status = await send('get', path(), token); assert.equal(status.status, 200);
   assert.deepEqual(status.body.data, { provisioned: true, userId: result.userId, email: 'New.Member@EXAMPLE.com', gymAccess: { role: 'member', status: 'active' }, activated: false });
@@ -95,6 +95,19 @@ test('activation sets existing Argon2id credential, consumes token and permits n
   const refresh = await send('post', '/api/v1/auth/refresh', undefined, { refreshToken: loggedIn.body.data.refreshToken }); assert.equal(refresh.status, 200);
   assert.notEqual(refresh.body.data.refreshToken, loggedIn.body.data.refreshToken);
   assert.equal((await send('get', path(), adminToken)).body.data.activated, true);
+});
+test('reissue replaces an unused code until the member activates', async () => {
+  const token = await login();
+  error(await send('post', `${path()}/reissue`, token), 404, 'MEMBER_ACCOUNT_NOT_PROVISIONED');
+  const first = await provision(token);
+  const response = await send('post', `${path()}/reissue`, token);
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.match(response.body.data.activationToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(response.body.data.activationToken, first.activationToken);
+  error(await activate(first.activationToken), 401, 'INVALID_ACTIVATION_CREDENTIAL');
+  assert.equal((await activate(response.body.data.activationToken)).status, 200);
+  error(await send('post', `${path()}/reissue`, token), 409, 'MEMBER_ACCOUNT_ALREADY_ACTIVATED');
+  assert.equal(await models.MemberActivation.countDocuments({ usedAt: null }), 0);
 });
 test('trainers, members and anonymous clients cannot provision, inspect or revoke', async () => {
   for (const account of [trainer, member]) {

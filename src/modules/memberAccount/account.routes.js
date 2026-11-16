@@ -11,6 +11,7 @@ function createMemberAccountRouter(service, authService, authorization) {
     authorization.requireRoles('admin'));
   router.post('/', validate({ params: schemas.memberParams, body: schemas.provision, query: schemas.empty }), controller.provision);
   router.get('/', validate({ params: schemas.memberParams, query: schemas.empty }), controller.get);
+  router.post('/reissue', validate({ params: schemas.memberParams, body: schemas.empty.default({}), query: schemas.empty }), controller.reissue);
   router.post('/revoke', validate({ params: schemas.memberParams, body: schemas.empty.default({}), query: schemas.empty }), controller.revoke);
   return router;
 }

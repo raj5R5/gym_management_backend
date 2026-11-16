@@ -1,6 +1,6 @@
 const { Types } = require('mongoose');
 const { objectId } = require('../gyms/gym.validation');
-const { createAssignment, updateAssignment, assignmentListInput, scopedInput } = require('./assignment.validation');
+const { createAssignment, updateAssignment, assignmentListInput, scopedInput, claimAssignment } = require('./assignment.validation');
 function fail(code) { const error = new Error('Assignment operation failed.'); error.code = code; throw error; }
 function parse(schema, value) {
   const result = schema.safeParse(value);
@@ -75,7 +75,39 @@ assignmentId: String(record._id),
         assignedAt: record.assignedAt, assignmentStatus: record.status, endedAt: record.endedAt };
     }), pagination: { page, limit, total: result[0].count[0]?.total ?? 0 } };
   }
+  async function selfScope(auth, authorization) {
+    const current = await scope(auth, authorization, ['trainer']);
+    return { gymId: new Types.ObjectId(current.gymId), trainerId: new Types.ObjectId(await selfTrainer(auth, current.gymId)) };
+  }
   return {
+    // Trainers may take on any active member of their gym as a client.
+    async myMembers(auth, authorization, query) {
+      const self = await selfScope(auth, authorization);
+      return view(auth, authorization, String(self.trainerId), { ...query, status: 'active' }, 'trainer');
+    },
+    async claim(auth, authorization, input) {
+      const self = await selfScope(auth, authorization);
+      const { memberId } = parse(claimAssignment, input);
+      await profiles(self.gymId, self.trainerId, memberId, true);
+      const filter = { gymId: self.gymId, trainerId: self.trainerId, memberId: new Types.ObjectId(memberId), status: 'active' };
+      const current = await TrainerMemberAssignment.findOne(filter).lean();
+      if (current) return { assignment: dto(current), created: false };
+      try {
+        return { assignment: dto((await TrainerMemberAssignment.create({ ...filter, assignedAt: new Date() })).toObject()), created: true };
+      } catch (error) {
+        // A concurrent claim won the unique active-relationship index: same outcome.
+        if (error?.code !== 11000) throw error;
+        return { assignment: dto(await TrainerMemberAssignment.findOne(filter).lean()), created: false };
+      }
+    },
+    async release(auth, authorization, memberId) {
+      const self = await selfScope(auth, authorization);
+      const result = await TrainerMemberAssignment.findOneAndUpdate({ gymId: self.gymId, trainerId: self.trainerId,
+        memberId: new Types.ObjectId(parse(objectId, memberId)), status: 'active' },
+      { status: 'inactive', endedAt: new Date() }, { returnDocument: 'after', runValidators: true }).lean();
+      if (!result) fail('ASSIGNMENT_NOT_FOUND');
+      return dto(result);
+    },
     async trainerMembers(auth, authorization, trainerId, query) { return view(auth, authorization, trainerId, query, 'trainer'); },
     async memberTrainers(auth, authorization, memberId, query) { return view(auth, authorization, memberId, query, 'member'); },
     // Route guard ensures trainer ownership denials occur before the controller.

@@ -122,13 +122,16 @@ async function fixed(instant, query = {}) {
 test('admin gets profile counts and zero financial/attendance metrics, without secrets', async () => {
   const response = await send('get', dashboardPath(), await login()); assert.equal(response.status, 200);
   const data = response.body.data;
-  assert.deepEqual(data.members, { total: 2, active: 2, inactive: 0, suspended: 0 });
+  assert.deepEqual(data.members, { total: 2, active: 2, inactive: 0, suspended: 0, joinedInPeriod: 2 });
   assert.deepEqual(data.trainers, { total: 1, active: 1, inactive: 0, suspended: 0 });
   assert.deepEqual(data.subscriptions, { currentlyActive: 0, expiringSoon: 0, expired: 0 });
   assert.deepEqual(data.payments, { periodSuccessfulAmountPaise: 0, periodSuccessfulCount: 0, outstandingAmountPaise: 0 });
   assert.equal(response.headers['cache-control'], 'no-store');
   assert.equal(response.body.meta.requestId, response.headers['x-request-id']);
-  assert.deepEqual(Object.keys(data).sort(), ['members', 'payments', 'period', 'subscriptions', 'trainers']);
+  assert.deepEqual(Object.keys(data).sort(), ['expenses', 'leads', 'members', 'payments', 'period', 'subscriptions', 'trainers', 'visits']);
+  assert.deepEqual(data.leads, { newInPeriod: 0, joinedInPeriod: 0, followUpsDue: 0, activeTrials: 0 });
+  assert.deepEqual(data.expenses, { periodAmountPaise: 0, profitPaise: 0 });
+  assert.deepEqual(data.visits, { periodCount: 0, distinctMembers: 0, today: 0 });
   assert.doesNotMatch(JSON.stringify(data), /password|token|email|firstName|memberId|userId|_id/i);
 });
 test('empty gym returns zero metrics', async () => {
@@ -159,7 +162,7 @@ test('status counts use all gym profiles, including inactive/suspended', async (
   await models.TrainerProfile.create({ ...person, trainerCode: 'TR02', status: 'inactive', branchId: branchA._id });
   await models.TrainerProfile.create({ ...person, trainerCode: 'TR03', status: 'suspended', branchId: branchOther._id });
   const token = await login(); const all = await dashboard(token);
-  assert.deepEqual(all.members, { total: 2, active: 0, inactive: 1, suspended: 1 });
+  assert.deepEqual(all.members, { total: 2, active: 0, inactive: 1, suspended: 1, joinedInPeriod: 2 });
   assert.deepEqual(all.trainers, { total: 3, active: 1, inactive: 1, suspended: 1 });
 });
 
